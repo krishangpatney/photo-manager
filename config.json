@@ -1,0 +1,8 @@
+{
+  "photography_path": "$HOME/Documents/Photography",
+  "sd_card_names": ["SD Card", "Untitled", "NO NAME", "EOS_DIGITAL"],
+  "check_interval_seconds": 5,
+  "supported_raw_extensions": [".cr2", ".nef", ".arw", ".dng", ".raw", ".orf", ".rw2", ".tiff", ".tif", ".raf", ".RAF"],
+  "supported_jpeg_extensions": [".jpg", ".jpeg"],
+  "log_file": "$HOME/Library/Logs/photo-transfer.log"
+}
