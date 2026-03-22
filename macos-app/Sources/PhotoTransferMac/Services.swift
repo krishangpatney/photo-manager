@@ -136,6 +136,7 @@ struct PhotoScanResult {
 
 struct PhotoScanner {
     let config: AppConfig
+    private let progressUpdateInterval = 100
 
     private static let fullMonthNames: Set<String> = {
         let formatter = DateFormatter()
@@ -164,7 +165,7 @@ struct PhotoScanner {
         return formatter
     }()
 
-    func scan(sourcePath: String) throws -> PhotoScanResult {
+    func scan(sourcePath: String, onProgress: ((ScanProgress) -> Void)? = nil) throws -> PhotoScanResult {
         let fileManager = FileManager.default
         guard let enumerator = fileManager.enumerator(
             at: URL(fileURLWithPath: sourcePath, isDirectory: true),
@@ -177,11 +178,18 @@ struct PhotoScanner {
 
         var grouped: [String: [PhotoFile]] = [:]
         var ignoredAlreadyOrganizedCount = 0
+        var scannedCount = 0
+        var groupedFileCount = 0
+        var lastReportedCount = 0
         for case let url as URL in enumerator {
             autoreleasepool {
                 let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey, .fileSizeKey])
                 if values?.isDirectory == true {
                     if [".Trashes", ".Spotlight-V100", ".fseventsd"].contains(url.lastPathComponent) {
+                        enumerator.skipDescendants()
+                    }
+                    if isOrganizedMediaDirectory(url: url, sourceRoot: sourcePath) {
+                        ignoredAlreadyOrganizedCount += countSupportedPhotos(in: url)
                         enumerator.skipDescendants()
                     }
                     return
@@ -196,6 +204,14 @@ struct PhotoScanner {
 
                 if isAlreadyOrganizedPhoto(url: url, sourceRoot: sourcePath) {
                     ignoredAlreadyOrganizedCount += 1
+                    scannedCount += 1
+                    reportProgressIfNeeded(
+                        onProgress: onProgress,
+                        scannedCount: scannedCount,
+                        groupedFileCount: groupedFileCount,
+                        ignoredAlreadyOrganizedCount: ignoredAlreadyOrganizedCount,
+                        lastReportedCount: &lastReportedCount
+                    )
                     return
                 }
 
@@ -208,8 +224,23 @@ struct PhotoScanner {
                     isRaw: isRaw
                 )
                 grouped[dateKey(for: photoDate), default: []].append(file)
+                scannedCount += 1
+                groupedFileCount += 1
+                reportProgressIfNeeded(
+                    onProgress: onProgress,
+                    scannedCount: scannedCount,
+                    groupedFileCount: groupedFileCount,
+                    ignoredAlreadyOrganizedCount: ignoredAlreadyOrganizedCount,
+                    lastReportedCount: &lastReportedCount
+                )
             }
         }
+
+        onProgress?(ScanProgress(
+            scannedCount: scannedCount,
+            groupedFileCount: groupedFileCount,
+            ignoredAlreadyOrganizedCount: ignoredAlreadyOrganizedCount
+        ))
 
         let keys = grouped.keys.sorted()
         let groups = keys.enumerated().map { offset, key in
@@ -240,7 +271,12 @@ struct PhotoScanner {
     }
 
     private func readPhotoDate(from url: URL) -> Date? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+        let options: CFDictionary = [
+            kCGImageSourceShouldCache: false,
+            kCGImageSourceShouldCacheImmediately: false
+        ] as CFDictionary
+
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, options),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
             return nil
         }
@@ -270,6 +306,76 @@ struct PhotoScanner {
 
     private func displayDate(for date: Date) -> String {
         Self.displayDateFormatter.string(from: date)
+    }
+
+    private func reportProgressIfNeeded(
+        onProgress: ((ScanProgress) -> Void)?,
+        scannedCount: Int,
+        groupedFileCount: Int,
+        ignoredAlreadyOrganizedCount: Int,
+        lastReportedCount: inout Int
+    ) {
+        guard let onProgress else { return }
+        guard scannedCount - lastReportedCount >= progressUpdateInterval else { return }
+        lastReportedCount = scannedCount
+        onProgress(ScanProgress(
+            scannedCount: scannedCount,
+            groupedFileCount: groupedFileCount,
+            ignoredAlreadyOrganizedCount: ignoredAlreadyOrganizedCount
+        ))
+    }
+
+    private func isOrganizedMediaDirectory(url: URL, sourceRoot: String) -> Bool {
+        let rootURL = URL(fileURLWithPath: sourceRoot, isDirectory: true)
+        let standardizedRoot = rootURL.standardizedFileURL.path
+        let standardizedPath = url.standardizedFileURL.path
+        guard standardizedPath.hasPrefix(standardizedRoot + "/") else {
+            return false
+        }
+
+        let relativePath = String(standardizedPath.dropFirst(standardizedRoot.count + 1))
+        let components = relativePath.split(separator: "/").map(String.init)
+        guard components.count >= 5 else {
+            return false
+        }
+
+        let suffix = Array(components.suffix(4))
+        let year = suffix[0]
+        let month = suffix[1].lowercased()
+        let day = suffix[2]
+        let mediaFolder = suffix[3].lowercased()
+
+        let isYear = year.count == 4 && year.allSatisfy(\.isNumber)
+        let isMonth = Self.fullMonthNames.contains(month)
+        let isDay = day.count == 2 && day.allSatisfy(\.isNumber)
+        let isMediaFolder = mediaFolder == "raw" || mediaFolder == "jpeg"
+
+        return isYear && isMonth && isDay && isMediaFolder
+    }
+
+    private func countSupportedPhotos(in directory: URL) -> Int {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles],
+            errorHandler: { _, _ in true }
+        ) else {
+            return 0
+        }
+
+        var count = 0
+        for case let url as URL in enumerator {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+            if values?.isDirectory == true {
+                continue
+            }
+
+            let ext = "." + url.pathExtension.lowercased()
+            if config.supportedRawExtensions.contains(ext) || config.supportedJpegExtensions.contains(ext) {
+                count += 1
+            }
+        }
+        return count
     }
 
     private func isAlreadyOrganizedPhoto(url: URL, sourceRoot: String) -> Bool {
@@ -315,6 +421,8 @@ private struct TransferJobResult: Sendable {
 }
 
 struct TransferService {
+    private let progressUpdateInterval = 25
+
     func transfer(
         filesByDate: [String: [PhotoFile]],
         dateGroups: [DateGroup],
@@ -327,10 +435,13 @@ struct TransferService {
         let jobs = buildJobs(filesByDate: filesByDate, dateGroups: dateGroups, destinationRoot: destinationRoot)
         let totalFiles = jobs.count
         var completed = 0
-        let workerCount = min(max(ProcessInfo.processInfo.activeProcessorCount / 2, 2), max(totalFiles, 1), 4)
+        let workerCount = min(max(ProcessInfo.processInfo.activeProcessorCount, 4), max(totalFiles, 1), 8)
+
+        try precreateDestinationDirectories(for: jobs)
 
         try await withThrowingTaskGroup(of: TransferJobResult.self) { group in
             var nextIndex = 0
+            var lastProgressUpdate = 0
 
             func scheduleNext() {
                 guard nextIndex < jobs.count else { return }
@@ -350,14 +461,18 @@ struct TransferService {
                 copiedJPEG += result.copiedJPEGCount
                 skipped += result.skippedCount
                 completed += 1
-                onProgress?(TransferProgress(
-                    completedCount: completed,
-                    totalCount: totalFiles,
-                    copiedRawCount: copiedRaw,
-                    copiedJPEGCount: copiedJPEG,
-                    skippedCount: skipped,
-                    currentFilename: result.filename
-                ))
+                let shouldReportEveryFile = totalFiles <= progressUpdateInterval
+                if shouldReportEveryFile || completed - lastProgressUpdate >= progressUpdateInterval || completed == totalFiles {
+                    lastProgressUpdate = completed
+                    onProgress?(TransferProgress(
+                        completedCount: completed,
+                        totalCount: totalFiles,
+                        copiedRawCount: copiedRaw,
+                        copiedJPEGCount: copiedJPEG,
+                        skippedCount: skipped,
+                        currentFilename: result.filename
+                    ))
+                }
                 scheduleNext()
             }
         }
@@ -382,9 +497,16 @@ struct TransferService {
         return jobs
     }
 
+    private func precreateDestinationDirectories(for jobs: [TransferJob]) throws {
+        let fileManager = FileManager.default
+        let directories = Set(jobs.map(\.destinationDirectory))
+        for directory in directories {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+    }
+
     private static func process(job: TransferJob) throws -> TransferJobResult {
         let fileManager = FileManager.default
-        try fileManager.createDirectory(at: job.destinationDirectory, withIntermediateDirectories: true)
 
         if fileManager.fileExists(atPath: job.destinationFile.path) {
             return TransferJobResult(

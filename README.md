@@ -6,6 +6,7 @@ Native macOS photo import app built with SwiftUI.
 
 - `macos-app/` - the active macOS app
 - `config.json` - shared scan/import configuration
+- `LICENSE` - non-commercial source-available license for this project
 
 ## Run the app
 
@@ -128,3 +129,11 @@ After that, tag a new release and GitHub will publish the app with the new icon.
 - map each shoot date to a folder
 - transfer one day or selected days
 - eject the SD card from the app when done
+
+## License
+
+This project is source-available for personal, educational, and other
+non-commercial use only.
+
+You may copy and modify it, but you may not sell it or use it commercially
+without prior written permission.

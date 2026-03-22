@@ -167,3 +167,9 @@ struct TransferProgress: Sendable {
         return min(max(Double(completedCount) / Double(totalCount), 0), 1)
     }
 }
+
+struct ScanProgress: Sendable {
+    let scannedCount: Int
+    let groupedFileCount: Int
+    let ignoredAlreadyOrganizedCount: Int
+}

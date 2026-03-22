@@ -67,6 +67,11 @@ struct ContentView: View {
             Text(viewModel.statusText)
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.primary)
+            if viewModel.isScanning && !viewModel.scanDetailText.isEmpty {
+                Text(viewModel.scanDetailText)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
             if viewModel.isWorking {
                 VStack(alignment: .leading, spacing: 8) {
                     ProgressView(value: viewModel.transferProgressFraction)

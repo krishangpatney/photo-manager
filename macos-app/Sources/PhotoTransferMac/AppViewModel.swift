@@ -15,6 +15,7 @@ final class AppViewModel: ObservableObject {
     @Published var isWorking = false
     @Published var isScanning = false
     @Published var hasScannedCurrentCard = false
+    @Published var scanDetailText: String = ""
     @Published var transferDetailText: String = ""
     @Published var transferProgressFraction: Double = 0
     @Published var lastTransferSummaryText: String = ""
@@ -113,9 +114,17 @@ final class AppViewModel: ObservableObject {
         }
 
         isScanning = true
+        scanDetailText = ""
         scanTask = Task.detached(priority: .userInitiated) { [config] in
             do {
-                let result = try PhotoScanner(config: config).scan(sourcePath: sourcePath)
+                let result = try PhotoScanner(config: config).scan(
+                    sourcePath: sourcePath,
+                    onProgress: { progress in
+                        Task { @MainActor in
+                            self.scanDetailText = "Scanned \(progress.scannedCount) file(s) • grouped \(progress.groupedFileCount) • ignored \(progress.ignoredAlreadyOrganizedCount)"
+                        }
+                    }
+                )
                 if Task.isCancelled {
                     return
                 }
@@ -143,6 +152,7 @@ final class AppViewModel: ObservableObject {
                     } else {
                         self.statusText = "Loaded \(mergedGroups.count) shoot dates from \(sourceName)."
                     }
+                    self.scanDetailText = "Scanned \(result.ignoredAlreadyOrganizedCount + result.filesByDate.values.reduce(0) { $0 + $1.count }) file(s) total."
                 }
             } catch {
                 if Task.isCancelled {
@@ -155,6 +165,7 @@ final class AppViewModel: ObservableObject {
                     self.clearLoadedSourceData()
                     self.isScanning = false
                     self.ignoredScanFileCount = 0
+                    self.scanDetailText = ""
                     self.statusText = "Failed to scan source folder: \(error.localizedDescription)"
                 }
             }
@@ -519,6 +530,7 @@ final class AppViewModel: ObservableObject {
         dateGroups = []
         hasScannedCurrentCard = false
         ignoredScanFileCount = 0
+        scanDetailText = ""
     }
 
     private func refreshDestinationVolumes(using volumes: [VolumeOption]) {
