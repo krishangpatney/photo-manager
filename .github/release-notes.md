@@ -22,3 +22,10 @@ Notes:
 
 - This is an unsigned macOS build shared through GitHub Releases.
 - macOS may warn on first launch; using right-click -> `Open` will allow it to run.
+- If macOS says the app is damaged or refuses to open it, run:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Photo Transfer Manager.app"
+```
+
+Then right-click the app and choose `Open`.
