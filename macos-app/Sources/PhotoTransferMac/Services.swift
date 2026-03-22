@@ -48,6 +48,7 @@ struct VolumeScanner {
             let total = Int64(values?.volumeTotalCapacity ?? 0)
             let free = Int64(values?.volumeAvailableCapacity ?? 0)
             let used = total > 0 ? total - free : nil
+            let sourceScore = sourceLikelihood(for: url)
 
             return VolumeOption(
                 name: name,
@@ -55,10 +56,75 @@ struct VolumeScanner {
                 totalBytes: total > 0 ? total : nil,
                 freeBytes: free > 0 ? free : nil,
                 usedBytes: used,
-                isSource: config.sdCardNames.contains(where: { name.localizedCaseInsensitiveContains($0) })
+                sourceScore: sourceScore
             )
         }
-        .sorted { $0.name < $1.name }
+        .sorted {
+            if $0.sourceScore == $1.sourceScore {
+                return $0.name < $1.name
+            }
+            return $0.sourceScore > $1.sourceScore
+        }
+    }
+
+    private func sourceLikelihood(for url: URL) -> Int {
+        let fileManager = FileManager.default
+        var score = 0
+
+        let dcimURL = url.appendingPathComponent("DCIM", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: dcimURL.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            score += 5
+        }
+
+        if containsSupportedPhotoFiles(in: dcimURL) {
+            score += 4
+        } else if containsSupportedPhotoFiles(in: url) {
+            score += 2
+        }
+
+        let lowercasedName = url.lastPathComponent.lowercased()
+        if ["untitled", "no name", "sd card", "eos_digital", "dcim"].contains(where: { lowercasedName.contains($0) }) {
+            score += 1
+        }
+
+        return score
+    }
+
+    private func containsSupportedPhotoFiles(in root: URL) -> Bool {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: root.path) else {
+            return false
+        }
+
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles],
+            errorHandler: { _, _ in true }
+        ) else {
+            return false
+        }
+
+        var checked = 0
+        for case let url as URL in enumerator {
+            checked += 1
+            if checked > 200 {
+                break
+            }
+
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+            if values?.isDirectory == true {
+                continue
+            }
+
+            let ext = "." + url.pathExtension.lowercased()
+            if config.supportedRawExtensions.contains(ext) || config.supportedJpegExtensions.contains(ext) {
+                return true
+            }
+        }
+
+        return false
     }
 }
 

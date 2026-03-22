@@ -34,16 +34,16 @@ struct VolumeOption: Identifiable, Hashable, Sendable {
     let totalBytes: Int64?
     let freeBytes: Int64?
     let usedBytes: Int64?
-    let isSource: Bool
+    let sourceScore: Int
 
-    init(name: String, path: String, totalBytes: Int64?, freeBytes: Int64?, usedBytes: Int64?, isSource: Bool) {
+    init(name: String, path: String, totalBytes: Int64?, freeBytes: Int64?, usedBytes: Int64?, sourceScore: Int) {
         self.id = path
         self.name = name
         self.path = path
         self.totalBytes = totalBytes
         self.freeBytes = freeBytes
         self.usedBytes = usedBytes
-        self.isSource = isSource
+        self.sourceScore = sourceScore
     }
 
     var usageFraction: Double {
@@ -59,6 +59,10 @@ struct VolumeOption: Identifiable, Hashable, Sendable {
     var usageText: String {
         guard let totalBytes, let usedBytes else { return "Storage info unavailable" }
         return "\(ByteCountFormatter.string(fromByteCount: usedBytes, countStyle: .file)) used / \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)) total"
+    }
+
+    var isLikelySource: Bool {
+        sourceScore > 0
     }
 }
 
