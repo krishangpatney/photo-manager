@@ -82,6 +82,45 @@ That triggers the GitHub Actions workflow in `.github/workflows/release.yml`, wh
 - packages the unsigned zip
 - uploads it to GitHub Releases
 
+## Add a custom app icon
+
+If you want the app to have a proper macOS icon in Finder and Launchpad:
+
+1. Create a square source image, ideally at least `1024x1024`
+2. Convert it into a macOS `.icns` file named:
+
+```bash
+macos-app/Resources/AppIcon.icns
+```
+
+3. Rebuild the shareable package:
+
+```bash
+cd macos-app
+./scripts/package-share.sh
+```
+
+The packaging script already checks for `macos-app/Resources/AppIcon.icns` and automatically bundles it into the app.
+
+If you start from a PNG, one common macOS flow is:
+
+```bash
+mkdir AppIcon.iconset
+sips -z 16 16 icon.png --out AppIcon.iconset/icon_16x16.png
+sips -z 32 32 icon.png --out AppIcon.iconset/icon_16x16@2x.png
+sips -z 32 32 icon.png --out AppIcon.iconset/icon_32x32.png
+sips -z 64 64 icon.png --out AppIcon.iconset/icon_32x32@2x.png
+sips -z 128 128 icon.png --out AppIcon.iconset/icon_128x128.png
+sips -z 256 256 icon.png --out AppIcon.iconset/icon_128x128@2x.png
+sips -z 256 256 icon.png --out AppIcon.iconset/icon_256x256.png
+sips -z 512 512 icon.png --out AppIcon.iconset/icon_256x256@2x.png
+sips -z 512 512 icon.png --out AppIcon.iconset/icon_512x512.png
+cp icon.png AppIcon.iconset/icon_512x512@2x.png
+iconutil -c icns AppIcon.iconset -o macos-app/Resources/AppIcon.icns
+```
+
+After that, tag a new release and GitHub will publish the app with the new icon.
+
 ## Current workflow
 
 - detect SD card
