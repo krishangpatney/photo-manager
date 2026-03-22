@@ -36,5 +36,8 @@ if [ -f "$ROOT_DIR/Resources/AppIcon.icns" ]; then
   cp "$ROOT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 fi
 
+echo "Ad-hoc signing app bundle..."
+codesign --force --deep --sign - "$APP_DIR"
+
 echo "App bundle ready:"
 echo "  $APP_DIR"

@@ -59,6 +59,12 @@ Because this build is unsigned, macOS may warn when your friends open it. They c
 3. choosing `Open`
 4. confirming the prompt
 
+If macOS says the app is damaged, remove the quarantine flag once:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Photo Transfer Manager.app"
+```
+
 ## GitHub Releases
 
 This repo can publish the shareable zip to GitHub Releases automatically.
