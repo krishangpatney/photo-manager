@@ -22,23 +22,36 @@ struct ContentView: View {
                 Text("Photo Manager")
                     .font(.system(size: 32, weight: .bold))
                 Spacer()
+                Picker("Workflow", selection: $viewModel.workflowMode) {
+                    ForEach(WorkflowMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 320)
+                .onChange(of: viewModel.workflowMode) { _, newMode in
+                    viewModel.setWorkflowMode(newMode)
+                }
+
                 Button(viewModel.isScanning ? "Scanning..." : "Refresh") {
                     viewModel.refresh()
                 }
                 .buttonStyle(.bordered)
                 .disabled(viewModel.isScanning || viewModel.isWorking)
 
-                Button(viewModel.isScanning ? "Scanning..." : "Scan SD Card") {
-                    viewModel.scanCurrentCard()
+                Button(viewModel.isScanning ? "Scanning..." : viewModel.scanButtonTitle) {
+                    viewModel.scanCurrentSource()
                 }
                 .buttonStyle(.bordered)
-                .disabled(viewModel.isScanning || viewModel.isWorking || viewModel.sourceVolume == nil)
+                .disabled(viewModel.isScanning || viewModel.isWorking || !viewModel.hasActiveSource)
 
-                Button("Eject SD Card") {
-                    viewModel.ejectSourceCard()
+                if viewModel.workflowMode == .sdImport {
+                    Button("Eject SD Card") {
+                        viewModel.ejectSourceCard()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(viewModel.sourceVolume == nil || viewModel.isScanning || viewModel.isWorking)
                 }
-                .buttonStyle(.bordered)
-                .disabled(viewModel.sourceVolume == nil || viewModel.isScanning || viewModel.isWorking)
 
                 Button(viewModel.isWorking ? "Transferring..." : transferButtonTitle) {
                     viewModel.startTransfer()
@@ -46,7 +59,9 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.isWorking || viewModel.isScanning || viewModel.selectedDateCount == 0 || viewModel.selectedDestination.isEmpty)
             }
-            Text("Transfer and organize your photos from SD card to SSD")
+            Text(viewModel.workflowMode == .sdImport
+                 ? "Transfer and organize your photos from SD card to SSD"
+                 : "Pick a folder source, group photos by date, and reorganize them into your destination")
                 .font(.system(size: 17))
                 .foregroundStyle(.secondary)
             Text(viewModel.statusText)
@@ -69,8 +84,15 @@ struct ContentView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
             }
-            if !viewModel.hasScannedCurrentCard, viewModel.sourceVolume != nil {
-                Text("We only detect the card at insert time now. Click Scan SD Card when you actually want to load the shoot dates.")
+            if viewModel.ignoredScanFileCount > 0 {
+                Text("Ignored \(viewModel.ignoredScanFileCount) file(s) already inside an organized date folder during the last scan.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            if !viewModel.hasScannedCurrentCard, viewModel.hasActiveSource {
+                Text(viewModel.workflowMode == .sdImport
+                     ? "We only detect the card at insert time now. Click Scan SD Card when you actually want to load the shoot dates."
+                     : "Reorganize mode never scans whole drives automatically. Pick the source folder you want, then click Scan Folder when you're ready.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             }
@@ -95,26 +117,33 @@ struct ContentView: View {
 
             HStack(alignment: .top, spacing: 18) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Source")
+                    Text(viewModel.activeSourceTitle)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.secondary)
-                    if !viewModel.sourceVolumes.isEmpty {
-                        ScrollView {
-                            LazyVStack(spacing: 12) {
-                                ForEach(viewModel.sourceVolumes) { volume in
-                                    StorageCard(
-                                        volume: volume,
-                                        isSelected: viewModel.sourceVolume?.path == volume.path,
-                                        actionTitle: "Use This Card"
-                                    ) {
-                                        viewModel.selectSource(volume.path)
+                    if viewModel.workflowMode == .sdImport {
+                        if !viewModel.sourceVolumes.isEmpty {
+                            ScrollView {
+                                LazyVStack(spacing: 12) {
+                                    ForEach(viewModel.sourceVolumes) { volume in
+                                        StorageCard(
+                                            volume: volume,
+                                            isSelected: viewModel.sourceVolume?.path == volume.path,
+                                            actionTitle: "Use This Card"
+                                        ) {
+                                            viewModel.selectSource(volume.path)
+                                        }
                                     }
                                 }
                             }
+                            .frame(height: 250)
+                        } else {
+                            EmptyStorageCard(message: "No likely source card detected yet")
                         }
-                        .frame(height: 250)
                     } else {
-                        EmptyStorageCard(message: "No likely source card detected yet")
+                        FolderSourceCard(
+                            source: viewModel.reorganizeSource,
+                            action: viewModel.chooseReorganizeSourceFolder
+                        )
                     }
                 }
 
@@ -249,6 +278,34 @@ private struct EmptyStorageCard: View {
     }
 }
 
+private struct FolderSourceCard: View {
+    let source: FolderSource?
+    let action: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(source?.name ?? "No source folder selected")
+                .font(.system(size: 16, weight: .semibold))
+
+            Text(source?.path ?? "Choose the exact folder you want the app to scan and reorganize.")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            Button(source == nil ? "Choose Source Folder" : "Choose Different Folder", action: action)
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, minHeight: 140, alignment: .leading)
+        .background(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
 private struct DateGroupCard: View {
     @Binding var group: DateGroup
     let isWorking: Bool
@@ -263,58 +320,74 @@ private struct DateGroupCard: View {
     let onTransferThisDay: () -> Void
     let onToggleSelect: () -> Void
 
+    private var mediaStatusText: String {
+        group.jpegCount > 0 ? "\(group.jpegCount) previewable JPEGs" : "RAW-only date"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 14) {
-                Button(action: onToggle) {
-                    Image(systemName: group.isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 14) {
+                    Button(action: onToggle) {
+                        Image(systemName: group.isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 16, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(group.displayDate)
+                            .font(.system(size: 18, weight: .semibold))
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 10) {
+                            Text(group.subtitle)
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
+                            Text(mediaStatusText)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(Color.black.opacity(0.04))
+                                .clipShape(Capsule())
+                        }
+                    }
+
+                    Spacer()
                 }
-                .buttonStyle(.plain)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(group.displayDate)
-                        .font(.system(size: 18, weight: .semibold))
-                    Text(group.subtitle)
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                }
+                HStack(alignment: .center, spacing: 12) {
+                    FolderInputControl(
+                        folderName: $group.folderName,
+                        folderOptions: folderOptions,
+                        onUseExistingFolder: onUseExistingFolder
+                    )
+                    .frame(width: 360)
 
-                Spacer()
-
-                FolderInputControl(
-                    folderName: $group.folderName,
-                    folderOptions: folderOptions,
-                    onUseExistingFolder: onUseExistingFolder
-                )
-                    .frame(width: 280)
-
-                Button("Open in Finder", action: onRevealInFinder)
-                    .buttonStyle(.bordered)
-
-                if !group.previews.isEmpty {
-                    Button("Open First JPEG", action: onOpenFirstJPEG)
+                    Button("Open in Finder", action: onRevealInFinder)
                         .buttonStyle(.bordered)
-                }
 
-                Button("Transfer This Day", action: onTransferThisDay)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isWorking || !hasDestination)
+                    if !group.previews.isEmpty {
+                        Button("Open First JPEG", action: onOpenFirstJPEG)
+                            .buttonStyle(.bordered)
+                    }
 
-                if group.isSelected {
-                    Button("Selected", action: onToggleSelect)
+                    Spacer(minLength: 0)
+
+                    Button("Transfer This Day", action: onTransferThisDay)
                         .buttonStyle(.borderedProminent)
-                        .disabled(isWorking)
-                } else {
-                    Button("Select Day", action: onToggleSelect)
-                        .buttonStyle(.bordered)
-                        .disabled(isWorking)
-                }
+                        .disabled(isWorking || !hasDestination)
 
-                Text(group.jpegCount > 0 ? "\(group.jpegCount) previewable JPEGs" : "RAW-only date")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    if group.isSelected {
+                        Button("Selected", action: onToggleSelect)
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isWorking)
+                    } else {
+                        Button("Select Day", action: onToggleSelect)
+                            .buttonStyle(.bordered)
+                            .disabled(isWorking)
+                    }
+                }
             }
             .padding(18)
 

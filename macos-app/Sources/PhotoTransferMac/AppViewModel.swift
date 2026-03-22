@@ -3,8 +3,10 @@ import Foundation
 
 @MainActor
 final class AppViewModel: ObservableObject {
+    @Published var workflowMode: WorkflowMode = .sdImport
     @Published var sourceVolume: VolumeOption?
     @Published var sourceVolumes: [VolumeOption] = []
+    @Published var reorganizeSource: FolderSource?
     @Published var destinationVolumes: [VolumeOption] = []
     @Published var selectedDestination: String = ""
     @Published var existingFolders: [String] = []
@@ -16,15 +18,18 @@ final class AppViewModel: ObservableObject {
     @Published var transferDetailText: String = ""
     @Published var transferProgressFraction: Double = 0
     @Published var lastTransferSummaryText: String = ""
+    @Published var ignoredScanFileCount = 0
 
     private let config: AppConfig
     private var filesByDate: [String: [PhotoFile]] = [:]
     private var scanTask: Task<Void, Never>?
     private var transferTask: Task<Void, Never>?
 
-    init() {
-        self.config = AppConfigLoader.load()
-        refresh()
+    init(config: AppConfig = AppConfigLoader.load(), autoRefresh: Bool = true) {
+        self.config = config
+        if autoRefresh {
+            refresh()
+        }
     }
 
     func refresh() {
@@ -32,65 +37,85 @@ final class AppViewModel: ObservableObject {
 
         let scanner = VolumeScanner(config: config)
         let volumes = scanner.loadVolumes()
-        let previousSourcePath = sourceVolume?.path
+        let previousSDSourcePath = sourceVolume?.path
         sourceVolumes = volumes.filter(\.isLikelySource)
         if sourceVolumes.isEmpty {
             sourceVolumes = volumes
         }
 
-        if let current = sourceVolume,
-           let refreshed = sourceVolumes.first(where: { $0.path == current.path }) {
-            sourceVolume = refreshed
-        } else {
-            sourceVolume = sourceVolumes.first
+        if workflowMode == .sdImport {
+            if let current = sourceVolume,
+               let refreshed = sourceVolumes.first(where: { $0.path == current.path }) {
+                sourceVolume = refreshed
+            } else {
+                sourceVolume = sourceVolumes.first
+            }
         }
 
-        destinationVolumes = volumes.filter { $0.path != sourceVolume?.path }
-        if selectedDestination.isEmpty || selectedDestination == sourceVolume?.path || !destinationVolumes.contains(where: { $0.path == selectedDestination }) {
-            selectedDestination = destinationVolumes.first?.path ?? ""
-        }
-
+        refreshDestinationVolumes(using: volumes)
         refreshFolderOptions()
 
-        guard let sourceVolume else {
-            filesByDate = [:]
-            dateGroups = []
+        if workflowMode == .sdImport {
+            guard let sourceVolume else {
+                clearLoadedSourceData()
+                isScanning = false
+                statusText = "No SD card detected."
+                return
+            }
+
+            if previousSDSourcePath != sourceVolume.path {
+                clearLoadedSourceData()
+            }
+
             isScanning = false
-            hasScannedCurrentCard = false
-            statusText = "No SD card detected."
-            return
-        }
-
-        if previousSourcePath != sourceVolume.path {
-            filesByDate = [:]
-            dateGroups = []
-            hasScannedCurrentCard = false
-        }
-
-        isScanning = false
-        if hasScannedCurrentCard {
-            statusText = "Card detected: \(sourceVolume.name). Review or rescan when ready."
+            if hasScannedCurrentCard {
+                statusText = "Card detected: \(sourceVolume.name). Review or rescan when ready."
+            } else {
+                statusText = "Card detected: \(sourceVolume.name). Click Scan SD Card when you're ready."
+            }
         } else {
-            statusText = "Card detected: \(sourceVolume.name). Click Scan SD Card when you're ready."
+            isScanning = false
+            if let reorganizeSource {
+                if hasScannedCurrentCard {
+                    statusText = "Folder selected: \(reorganizeSource.name). Review or rescan when ready."
+                } else {
+                    statusText = "Folder selected: \(reorganizeSource.name). Click Scan Folder when you're ready."
+                }
+            } else {
+                clearLoadedSourceData()
+                statusText = "Choose a source folder to reorganize."
+            }
         }
     }
 
-    func scanCurrentCard() {
-        guard let sourceVolume else {
-            statusText = "No SD card detected."
-            return
-        }
-
+    func scanCurrentSource() {
         scanTask?.cancel()
         let existingGroups = Dictionary(uniqueKeysWithValues: dateGroups.map { ($0.dateKey, $0) })
-        let sourcePath = sourceVolume.path
-        let sourceName = sourceVolume.name
+        let sourcePath: String
+        let sourceName: String
+        switch workflowMode {
+        case .sdImport:
+            guard let sourceVolume else {
+                statusText = "No SD card detected."
+                return
+            }
+            sourcePath = sourceVolume.path
+            sourceName = sourceVolume.name
+            statusText = "Scanning \(sourceName)..."
+        case .reorganizeFolder:
+            guard let reorganizeSource else {
+                statusText = "Choose a source folder before scanning."
+                return
+            }
+            sourcePath = reorganizeSource.path
+            sourceName = reorganizeSource.name
+            statusText = "Scanning selected folder \(sourceName)..."
+        }
 
         isScanning = true
-        statusText = "Scanning \(sourceName)..."
         scanTask = Task.detached(priority: .userInitiated) { [config] in
             do {
-                let result = try PhotoScanner(config: config).scan(sdCardPath: sourcePath)
+                let result = try PhotoScanner(config: config).scan(sourcePath: sourcePath)
                 if Task.isCancelled {
                     return
                 }
@@ -105,28 +130,32 @@ final class AppViewModel: ObservableObject {
                     return updated
                 }
                 await MainActor.run {
-                    guard self.sourceVolume?.path == sourcePath else {
+                    guard self.currentSourcePath == sourcePath else {
                         return
                     }
                     self.filesByDate = result.filesByDate
                     self.dateGroups = mergedGroups
                     self.isScanning = false
                     self.hasScannedCurrentCard = true
-                    self.statusText = "Loaded \(mergedGroups.count) shoot dates from \(sourceName)."
+                    self.ignoredScanFileCount = result.ignoredAlreadyOrganizedCount
+                    if result.ignoredAlreadyOrganizedCount > 0 {
+                        self.statusText = "Loaded \(mergedGroups.count) shoot dates from \(sourceName). Ignored \(result.ignoredAlreadyOrganizedCount) file(s) already in organized folders."
+                    } else {
+                        self.statusText = "Loaded \(mergedGroups.count) shoot dates from \(sourceName)."
+                    }
                 }
             } catch {
                 if Task.isCancelled {
                     return
                 }
                 await MainActor.run {
-                    guard self.sourceVolume?.path == sourcePath else {
+                    guard self.currentSourcePath == sourcePath else {
                         return
                     }
-                    self.filesByDate = [:]
-                    self.dateGroups = []
+                    self.clearLoadedSourceData()
                     self.isScanning = false
-                    self.hasScannedCurrentCard = false
-                    self.statusText = "Failed to scan SD card: \(error.localizedDescription)"
+                    self.ignoredScanFileCount = 0
+                    self.statusText = "Failed to scan source folder: \(error.localizedDescription)"
                 }
             }
         }
@@ -146,7 +175,26 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func chooseReorganizeSourceFolder() {
+        NSApp.activate(ignoringOtherApps: true)
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Source Folder"
+        panel.directoryURL = reorganizeSource.map { URL(fileURLWithPath: $0.path, isDirectory: true) }
+            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+
+        if panel.runModal() == .OK, let url = panel.url {
+            selectReorganizeSourceFolder(url.path)
+        }
+    }
+
     func selectDestination(_ path: String) {
+        if workflowMode == .reorganizeFolder, path == reorganizeSource?.path {
+            statusText = "Choose a destination folder other than the reorganize source folder."
+            return
+        }
         selectedDestination = path
         refreshFolderOptions()
     }
@@ -187,18 +235,33 @@ final class AppViewModel: ObservableObject {
     func selectSource(_ path: String) {
         guard let selected = sourceVolumes.first(where: { $0.path == path }) else { return }
         sourceVolume = selected
-        destinationVolumes = VolumeScanner(config: config)
-            .loadVolumes()
-            .filter { $0.path != path }
-        if selectedDestination.isEmpty || selectedDestination == path || !destinationVolumes.contains(where: { $0.path == selectedDestination }) {
-            selectedDestination = destinationVolumes.first?.path ?? ""
-        }
+        refreshDestinationVolumes(using: VolumeScanner(config: config).loadVolumes())
         refreshFolderOptions()
 
-        filesByDate = [:]
-        dateGroups = []
-        hasScannedCurrentCard = false
+        clearLoadedSourceData()
         statusText = "Source selected: \(selected.name). Click Scan SD Card when you're ready."
+    }
+
+    func selectReorganizeSourceFolder(_ path: String) {
+        reorganizeSource = FolderSource(path: path)
+        if selectedDestination == path {
+            selectedDestination = ""
+        }
+        refreshDestinationVolumes(using: VolumeScanner(config: config).loadVolumes())
+        refreshFolderOptions()
+
+        clearLoadedSourceData()
+        statusText = "Source folder selected: \(reorganizeSource?.name ?? "folder"). Click Scan Folder when you're ready."
+    }
+
+    func setWorkflowMode(_ mode: WorkflowMode) {
+        guard workflowMode != mode else { return }
+        workflowMode = mode
+        clearLoadedSourceData()
+        if mode == .reorganizeFolder {
+            sourceVolume = nil
+        }
+        refresh()
     }
 
     func setFolderName(_ folder: String, for dateGroupID: DateGroup.ID) {
@@ -423,6 +486,60 @@ final class AppViewModel: ObservableObject {
 
     var selectedDateCount: Int {
         dateGroups.filter(\.isSelected).count
+    }
+
+    var currentSourcePath: String? {
+        switch workflowMode {
+        case .sdImport:
+            return sourceVolume?.path
+        case .reorganizeFolder:
+            return reorganizeSource?.path
+        }
+    }
+
+    var scanButtonTitle: String {
+        workflowMode == .sdImport ? "Scan SD Card" : "Scan Folder"
+    }
+
+    var hasActiveSource: Bool {
+        currentSourcePath != nil
+    }
+
+    var activeSourceTitle: String {
+        switch workflowMode {
+        case .sdImport:
+            return "Source (SD Card)"
+        case .reorganizeFolder:
+            return "Source Folder"
+        }
+    }
+
+    private func clearLoadedSourceData() {
+        filesByDate = [:]
+        dateGroups = []
+        hasScannedCurrentCard = false
+        ignoredScanFileCount = 0
+    }
+
+    private func refreshDestinationVolumes(using volumes: [VolumeOption]) {
+        let excludedPath = workflowMode == .sdImport ? sourceVolume?.path : nil
+        destinationVolumes = volumes.filter { volume in
+            guard let excludedPath else { return true }
+            return volume.path != excludedPath
+        }
+
+        if workflowMode == .reorganizeFolder, selectedDestination == reorganizeSource?.path {
+            selectedDestination = ""
+        }
+
+        if !selectedDestination.isEmpty {
+            if workflowMode == .sdImport,
+               !destinationVolumes.contains(where: { $0.path == selectedDestination }) {
+                selectedDestination = destinationVolumes.first?.path ?? ""
+            }
+        } else if workflowMode == .sdImport {
+            selectedDestination = destinationVolumes.first?.path ?? ""
+        }
     }
 
     private func folderNames(at path: String) -> [String] {

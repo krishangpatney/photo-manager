@@ -114,6 +114,78 @@ final class TransferServiceTests: XCTestCase {
         XCTAssertEqual(progressEvents.last?.skippedCount, 2)
     }
 
+    func testScannerCanGroupPhotosFromGenericFolderSource() throws {
+        let sourceRoot = tempRoot.appendingPathComponent("LibrarySource", isDirectory: true)
+        let nested = sourceRoot.appendingPathComponent("Trips/Day1", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+
+        let photoDate = makeDate(year: 2026, month: 3, day: 19)
+        let jpegURL = nested.appendingPathComponent("IMG_1001.JPG")
+        try Data("jpeg-data".utf8).write(to: jpegURL)
+        try FileManager.default.setAttributes([.modificationDate: photoDate], ofItemAtPath: jpegURL.path)
+
+        let ignoredURL = nested.appendingPathComponent("notes.txt")
+        try Data("ignore".utf8).write(to: ignoredURL)
+
+        let result = try PhotoScanner(config: .fallback).scan(sourcePath: sourceRoot.path)
+
+        XCTAssertEqual(result.dateGroups.count, 1)
+        XCTAssertEqual(result.dateGroups.first?.photoCount, 1)
+        XCTAssertEqual(result.dateGroups.first?.jpegCount, 1)
+        XCTAssertEqual(result.dateGroups.first?.rawCount, 0)
+        XCTAssertEqual(result.filesByDate["2026-03-19"]?.count, 1)
+        XCTAssertEqual(result.filesByDate["2026-03-19"]?.first?.filename, "IMG_1001.JPG")
+    }
+
+    func testScannerSkipsFilesAlreadyInsideOrganizedDateStructure() throws {
+        let sourceRoot = tempRoot.appendingPathComponent("LibrarySource", isDirectory: true)
+        let organizedFolder = sourceRoot.appendingPathComponent("Mom/2026/March/19/jpeg", isDirectory: true)
+        let unsortedFolder = sourceRoot.appendingPathComponent("Dump", isDirectory: true)
+        try FileManager.default.createDirectory(at: organizedFolder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: unsortedFolder, withIntermediateDirectories: true)
+
+        let date = makeDate(year: 2026, month: 3, day: 19)
+        let organizedJPEG = organizedFolder.appendingPathComponent("IMG_2000.JPG")
+        let unsortedJPEG = unsortedFolder.appendingPathComponent("IMG_2001.JPG")
+        try Data("organized".utf8).write(to: organizedJPEG)
+        try Data("unsorted".utf8).write(to: unsortedJPEG)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: organizedJPEG.path)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: unsortedJPEG.path)
+
+        let result = try PhotoScanner(config: .fallback).scan(sourcePath: sourceRoot.path)
+
+        XCTAssertEqual(result.dateGroups.count, 1)
+        XCTAssertEqual(result.dateGroups.first?.photoCount, 1)
+        XCTAssertEqual(result.filesByDate["2026-03-19"]?.first?.filename, "IMG_2001.JPG")
+        XCTAssertEqual(result.ignoredAlreadyOrganizedCount, 1)
+    }
+
+    @MainActor
+    func testSwitchingToReorganizeModeClearsLoadedDates() {
+        let viewModel = AppViewModel(config: .fallback, autoRefresh: false)
+        viewModel.dateGroups = [
+            DateGroup(
+                dateKey: "2026-02-07",
+                displayDate: "Saturday, February 07, 2026",
+                photoCount: 2,
+                rawCount: 1,
+                jpegCount: 1,
+                totalBytes: 17,
+                folderName: "Birthday",
+                previews: [],
+                isExpanded: false,
+                isSelected: true
+            )
+        ]
+        viewModel.hasScannedCurrentCard = true
+
+        viewModel.setWorkflowMode(.reorganizeFolder)
+
+        XCTAssertEqual(viewModel.workflowMode, .reorganizeFolder)
+        XCTAssertTrue(viewModel.dateGroups.isEmpty)
+        XCTAssertFalse(viewModel.hasScannedCurrentCard)
+    }
+
     private func makeSourceFile(named name: String, contents: String) throws -> URL {
         let sourceDir = tempRoot.appendingPathComponent("Source", isDirectory: true)
         try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)

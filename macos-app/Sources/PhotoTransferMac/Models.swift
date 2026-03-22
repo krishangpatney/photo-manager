@@ -1,5 +1,21 @@
 import Foundation
 
+enum WorkflowMode: String, CaseIterable, Identifiable, Sendable {
+    case sdImport
+    case reorganizeFolder
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .sdImport:
+            return "SD Import"
+        case .reorganizeFolder:
+            return "Reorganize Folder"
+        }
+    }
+}
+
 struct AppConfig: Decodable, Sendable {
     let photographyPath: String
     let sdCardNames: [String]
@@ -25,6 +41,18 @@ struct AppConfig: Decodable, Sendable {
         supportedJpegExtensions: [".jpg", ".jpeg"],
         logFile: "\(NSHomeDirectory())/Library/Logs/photo-transfer.log"
     )
+}
+
+struct FolderSource: Identifiable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let path: String
+
+    init(path: String) {
+        self.id = path
+        self.path = path
+        self.name = URL(fileURLWithPath: path).lastPathComponent
+    }
 }
 
 struct VolumeOption: Identifiable, Hashable, Sendable {

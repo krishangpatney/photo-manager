@@ -131,10 +131,17 @@ struct VolumeScanner {
 struct PhotoScanResult {
     let filesByDate: [String: [PhotoFile]]
     let dateGroups: [DateGroup]
+    let ignoredAlreadyOrganizedCount: Int
 }
 
 struct PhotoScanner {
     let config: AppConfig
+
+    private static let fullMonthNames: Set<String> = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return Set(formatter.monthSymbols.map { $0.lowercased() })
+    }()
 
     private static let exifDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -157,18 +164,19 @@ struct PhotoScanner {
         return formatter
     }()
 
-    func scan(sdCardPath: String) throws -> PhotoScanResult {
+    func scan(sourcePath: String) throws -> PhotoScanResult {
         let fileManager = FileManager.default
         guard let enumerator = fileManager.enumerator(
-            at: URL(fileURLWithPath: sdCardPath, isDirectory: true),
+            at: URL(fileURLWithPath: sourcePath, isDirectory: true),
             includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey, .fileSizeKey],
             options: [.skipsHiddenFiles],
             errorHandler: { _, _ in true }
         ) else {
-            return PhotoScanResult(filesByDate: [:], dateGroups: [])
+            return PhotoScanResult(filesByDate: [:], dateGroups: [], ignoredAlreadyOrganizedCount: 0)
         }
 
         var grouped: [String: [PhotoFile]] = [:]
+        var ignoredAlreadyOrganizedCount = 0
         for case let url as URL in enumerator {
             autoreleasepool {
                 let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey, .fileSizeKey])
@@ -183,6 +191,11 @@ struct PhotoScanner {
                 let isRaw = config.supportedRawExtensions.contains(ext)
                 let isJPEG = config.supportedJpegExtensions.contains(ext)
                 if !isRaw && !isJPEG {
+                    return
+                }
+
+                if isAlreadyOrganizedPhoto(url: url, sourceRoot: sourcePath) {
+                    ignoredAlreadyOrganizedCount += 1
                     return
                 }
 
@@ -219,7 +232,11 @@ struct PhotoScanner {
             )
         }
 
-        return PhotoScanResult(filesByDate: grouped, dateGroups: groups)
+        return PhotoScanResult(
+            filesByDate: grouped,
+            dateGroups: groups,
+            ignoredAlreadyOrganizedCount: ignoredAlreadyOrganizedCount
+        )
     }
 
     private func readPhotoDate(from url: URL) -> Date? {
@@ -253,6 +270,34 @@ struct PhotoScanner {
 
     private func displayDate(for date: Date) -> String {
         Self.displayDateFormatter.string(from: date)
+    }
+
+    private func isAlreadyOrganizedPhoto(url: URL, sourceRoot: String) -> Bool {
+        let rootURL = URL(fileURLWithPath: sourceRoot, isDirectory: true)
+        let standardizedRoot = rootURL.standardizedFileURL.path
+        let standardizedPath = url.standardizedFileURL.path
+        guard standardizedPath.hasPrefix(standardizedRoot + "/") else {
+            return false
+        }
+
+        let relativePath = String(standardizedPath.dropFirst(standardizedRoot.count + 1))
+        let components = relativePath.split(separator: "/").map(String.init)
+        guard components.count >= 6 else {
+            return false
+        }
+
+        let suffix = Array(components.suffix(5))
+        let year = suffix[0]
+        let month = suffix[1].lowercased()
+        let day = suffix[2]
+        let mediaFolder = suffix[3].lowercased()
+
+        let isYear = year.count == 4 && year.allSatisfy(\.isNumber)
+        let isMonth = Self.fullMonthNames.contains(month)
+        let isDay = day.count == 2 && day.allSatisfy(\.isNumber)
+        let isMediaFolder = mediaFolder == "raw" || mediaFolder == "jpeg"
+
+        return isYear && isMonth && isDay && isMediaFolder
     }
 }
 
