@@ -7,9 +7,11 @@ cd "$ROOT_DIR"
 
 APP_NAME="Photo Transfer Manager.app"
 DIST_DIR="$ROOT_DIR/dist"
-ZIP_PATH="$DIST_DIR/photo-transfer-manager-macos.zip"
+VERSION="${VERSION:-0.1.0}"
+BUILD_NUMBER="${BUILD_NUMBER:-1}"
+ZIP_PATH="$DIST_DIR/photo-transfer-manager-${VERSION}-macos.zip"
 
-"$ROOT_DIR/scripts/build-app.sh"
+VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" "$ROOT_DIR/scripts/build-app.sh"
 
 mkdir -p "$DIST_DIR"
 rm -f "$ZIP_PATH"

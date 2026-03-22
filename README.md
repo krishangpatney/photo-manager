@@ -40,7 +40,14 @@ cd macos-app
 That creates:
 
 ```bash
-macos-app/dist/photo-transfer-manager-macos.zip
+macos-app/dist/photo-transfer-manager-0.1.0-macos.zip
+```
+
+You can also override the version:
+
+```bash
+cd macos-app
+VERSION=0.2.0 BUILD_NUMBER=12 ./scripts/package-share.sh
 ```
 
 ## Sharing with friends
@@ -51,6 +58,23 @@ Because this build is unsigned, macOS may warn when your friends open it. They c
 2. right-clicking the app
 3. choosing `Open`
 4. confirming the prompt
+
+## GitHub Releases
+
+This repo can publish the shareable zip to GitHub Releases automatically.
+
+Push a version tag like this:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+That triggers the GitHub Actions workflow in `.github/workflows/release.yml`, which:
+
+- builds the macOS app
+- packages the unsigned zip
+- uploads it to GitHub Releases
 
 ## Current workflow
 

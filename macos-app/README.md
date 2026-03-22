@@ -51,6 +51,12 @@ Create a shareable zip:
 ./scripts/package-share.sh
 ```
 
+You can stamp a specific version into the app bundle and zip name:
+
+```bash
+VERSION=0.2.0 BUILD_NUMBER=12 ./scripts/package-share.sh
+```
+
 ## Unsigned app note
 
 This package flow creates an unsigned app for easy friend-to-friend sharing. macOS may warn on first launch; recipients can right-click the app and choose `Open`.
