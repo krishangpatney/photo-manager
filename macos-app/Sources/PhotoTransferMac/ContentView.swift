@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -94,13 +95,26 @@ struct ContentView: View {
 
             HStack(alignment: .top, spacing: 18) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Source (SD Card)")
+                    Text("Source")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.secondary)
-                    if let source = viewModel.sourceVolume {
-                        StorageCard(volume: source, isSelected: true, actionTitle: nil) {}
+                    if !viewModel.sourceVolumes.isEmpty {
+                        ScrollView {
+                            LazyVStack(spacing: 12) {
+                                ForEach(viewModel.sourceVolumes) { volume in
+                                    StorageCard(
+                                        volume: volume,
+                                        isSelected: viewModel.sourceVolume?.path == volume.path,
+                                        actionTitle: "Use This Card"
+                                    ) {
+                                        viewModel.selectSource(volume.path)
+                                    }
+                                }
+                            }
+                        }
+                        .frame(height: 250)
                     } else {
-                        EmptyStorageCard(message: "No SD card detected yet")
+                        EmptyStorageCard(message: "No likely source card detected yet")
                     }
                 }
 
@@ -153,17 +167,16 @@ struct ContentView: View {
                 .font(.system(size: 18, weight: .semibold))
 
             LazyVStack(spacing: 18) {
-                ForEach(viewModel.dateGroups) { group in
+                ForEach($viewModel.dateGroups) { $group in
                     DateGroupCard(
-                        group: group,
+                        group: $group,
                         isWorking: viewModel.isWorking || viewModel.isScanning,
                         hasDestination: !viewModel.selectedDestination.isEmpty,
                         resolvedFolderName: viewModel.resolvedFolderName(for: group),
                         destinationPreviewPath: viewModel.destinationPreviewPath(for: group),
                         folderOptions: viewModel.existingFolders,
                         onToggle: { viewModel.toggleExpanded(group.id) },
-                        onFolderChange: { viewModel.setFolderName($0, for: group.id) },
-                        onUseExisting: { viewModel.addExistingFolder($0, to: group.id) },
+                        onUseExistingFolder: { viewModel.addExistingFolder($0, to: group.id) },
                         onRevealInFinder: { viewModel.revealInFinder(for: group.dateKey) },
                         onOpenFirstJPEG: { viewModel.openFirstJPEG(for: group.dateKey) },
                         onTransferThisDay: { viewModel.transferDateGroup(group.id) },
@@ -237,15 +250,14 @@ private struct EmptyStorageCard: View {
 }
 
 private struct DateGroupCard: View {
-    let group: DateGroup
+    @Binding var group: DateGroup
     let isWorking: Bool
     let hasDestination: Bool
     let resolvedFolderName: String
     let destinationPreviewPath: String
     let folderOptions: [String]
     let onToggle: () -> Void
-    let onFolderChange: (String) -> Void
-    let onUseExisting: (String) -> Void
+    let onUseExistingFolder: (String) -> Void
     let onRevealInFinder: () -> Void
     let onOpenFirstJPEG: () -> Void
     let onTransferThisDay: () -> Void
@@ -271,16 +283,12 @@ private struct DateGroupCard: View {
 
                 Spacer()
 
-                Menu {
-                    ForEach(folderOptions, id: \.self) { folder in
-                        Button(folder) {
-                            onUseExisting(folder)
-                        }
-                    }
-                } label: {
-                    Label(group.folderName.isEmpty ? "Use Existing Folder" : resolvedFolderName, systemImage: "folder")
-                }
-                .menuStyle(.borderlessButton)
+                FolderInputControl(
+                    folderName: $group.folderName,
+                    folderOptions: folderOptions,
+                    onUseExistingFolder: onUseExistingFolder
+                )
+                    .frame(width: 280)
 
                 Button("Open in Finder", action: onRevealInFinder)
                     .buttonStyle(.bordered)
@@ -345,20 +353,7 @@ private struct DateGroupCard: View {
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
 
-                    HStack(spacing: 12) {
-                        Text("Folder")
-                            .font(.system(size: 14, weight: .semibold))
-                            .frame(width: 60, alignment: .leading)
-                        TextField("Type a folder name", text: Binding(
-                            get: { group.folderName },
-                            set: { newValue in
-                                onFolderChange(newValue)
-                            }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                    }
-
-                    Text("Choose an existing folder from the menu or type a new folder name directly.")
+                    Text("Use the folder control in the top row to type a new folder name or pick an existing one.")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                 }
@@ -370,6 +365,48 @@ private struct DateGroupCard: View {
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(group.isSelected ? Color.blue.opacity(0.55) : Color.black.opacity(0.06), lineWidth: group.isSelected ? 2 : 1)
+        )
+    }
+}
+
+private struct FolderInputControl: View {
+    @Binding var folderName: String
+    let folderOptions: [String]
+    let onUseExistingFolder: (String) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "folder")
+                .foregroundStyle(.secondary)
+
+            TextField("New Folder", text: $folderName)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15))
+                .lineLimit(1)
+
+            Menu {
+                if folderOptions.isEmpty {
+                    Text("No existing folders yet")
+                } else {
+                    ForEach(folderOptions, id: \.self) { folder in
+                        Button(folder) {
+                            onUseExistingFolder(folder)
+                        }
+                    }
+                }
+            } label: {
+                Color.clear
+                    .frame(width: 14, height: 14)
+            }
+            .menuStyle(.borderlessButton)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.black.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
         )
     }
 }

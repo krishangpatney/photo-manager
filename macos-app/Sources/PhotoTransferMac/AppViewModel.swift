@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published var sourceVolume: VolumeOption?
+    @Published var sourceVolumes: [VolumeOption] = []
     @Published var destinationVolumes: [VolumeOption] = []
     @Published var selectedDestination: String = ""
     @Published var existingFolders: [String] = []
@@ -32,8 +33,22 @@ final class AppViewModel: ObservableObject {
         let scanner = VolumeScanner(config: config)
         let volumes = scanner.loadVolumes()
         let previousSourcePath = sourceVolume?.path
-        sourceVolume = volumes.first(where: { $0.isSource })
-        destinationVolumes = volumes.filter { !$0.isSource }
+        sourceVolumes = volumes.filter(\.isLikelySource)
+        if sourceVolumes.isEmpty {
+            sourceVolumes = volumes
+        }
+
+        if let current = sourceVolume,
+           let refreshed = sourceVolumes.first(where: { $0.path == current.path }) {
+            sourceVolume = refreshed
+        } else {
+            sourceVolume = sourceVolumes.first
+        }
+
+        destinationVolumes = volumes.filter { $0.path != sourceVolume?.path }
+        if selectedDestination.isEmpty || selectedDestination == sourceVolume?.path || !destinationVolumes.contains(where: { $0.path == selectedDestination }) {
+            selectedDestination = destinationVolumes.first?.path ?? ""
+        }
 
         refreshFolderOptions()
 
@@ -118,6 +133,7 @@ final class AppViewModel: ObservableObject {
     }
 
     func chooseDestinationFolder() {
+        NSApp.activate(ignoringOtherApps: true)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -133,6 +149,56 @@ final class AppViewModel: ObservableObject {
     func selectDestination(_ path: String) {
         selectedDestination = path
         refreshFolderOptions()
+    }
+
+    func promptForFolderName(for dateGroupID: DateGroup.ID) {
+        guard let index = dateGroups.firstIndex(where: { $0.id == dateGroupID }) else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        let panel = NSSavePanel()
+        panel.title = "Set Folder Name"
+        panel.message = "Choose or create the folder for \(dateGroups[index].displayDate)."
+        panel.prompt = "Use Folder"
+        panel.nameFieldLabel = "Folder Name:"
+        panel.nameFieldStringValue = dateGroups[index].folderName.isEmpty ? "New Folder" : dateGroups[index].folderName
+        panel.canCreateDirectories = true
+        panel.showsTagField = false
+        panel.isExtensionHidden = true
+        if !selectedDestination.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: selectedDestination, isDirectory: true)
+        } else {
+            panel.directoryURL = URL(fileURLWithPath: "/Volumes", isDirectory: true)
+        }
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let chosenFolderName: String
+        let parentDirectory = url.deletingLastPathComponent().path
+        if !selectedDestination.isEmpty, parentDirectory == selectedDestination {
+            chosenFolderName = url.lastPathComponent
+        } else if !selectedDestination.isEmpty, url.path.hasPrefix(selectedDestination + "/") {
+            chosenFolderName = String(url.path.dropFirst(selectedDestination.count + 1))
+        } else {
+            chosenFolderName = url.lastPathComponent
+        }
+
+        dateGroups[index].folderName = chosenFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func selectSource(_ path: String) {
+        guard let selected = sourceVolumes.first(where: { $0.path == path }) else { return }
+        sourceVolume = selected
+        destinationVolumes = VolumeScanner(config: config)
+            .loadVolumes()
+            .filter { $0.path != path }
+        if selectedDestination.isEmpty || selectedDestination == path || !destinationVolumes.contains(where: { $0.path == selectedDestination }) {
+            selectedDestination = destinationVolumes.first?.path ?? ""
+        }
+        refreshFolderOptions()
+
+        filesByDate = [:]
+        dateGroups = []
+        hasScannedCurrentCard = false
+        statusText = "Source selected: \(selected.name). Click Scan SD Card when you're ready."
     }
 
     func setFolderName(_ folder: String, for dateGroupID: DateGroup.ID) {

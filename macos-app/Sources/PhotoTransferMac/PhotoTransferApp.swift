@@ -8,6 +8,11 @@ struct PhotoTransferApp: App {
         WindowGroup {
             ContentView(viewModel: viewModel)
                 .frame(minWidth: 1220, minHeight: 860)
+                .onAppear {
+                    // Force the app to become the active/key app so text input lands here.
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
+                }
         }
         .windowResizability(.contentSize)
     }
