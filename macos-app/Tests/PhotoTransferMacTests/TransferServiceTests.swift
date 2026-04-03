@@ -55,9 +55,9 @@ final class TransferServiceTests: XCTestCase {
         XCTAssertEqual(summary.skippedCount, 0)
 
         let rawDestination = destinationRoot
-            .appendingPathComponent("Mom-UK-Trip/2026/February/07/raw/DSCF0001.RAF")
+            .appendingPathComponent("Mom/UK-Trip/2026/February/07/raw/DSCF0001.RAF")
         let jpegDestination = destinationRoot
-            .appendingPathComponent("Mom-UK-Trip/2026/February/07/jpeg/DSCF0001.JPG")
+            .appendingPathComponent("Mom/UK-Trip/2026/February/07/jpeg/DSCF0001.JPG")
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: rawDestination.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: jpegDestination.path))
@@ -114,7 +114,7 @@ final class TransferServiceTests: XCTestCase {
         XCTAssertEqual(progressEvents.last?.skippedCount, 2)
     }
 
-    func testScannerCanGroupPhotosFromGenericFolderSource() throws {
+    func testScannerCanGroupPhotosFromGenericFolderSource() async throws {
         let sourceRoot = tempRoot.appendingPathComponent("LibrarySource", isDirectory: true)
         let nested = sourceRoot.appendingPathComponent("Trips/Day1", isDirectory: true)
         try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
@@ -127,7 +127,7 @@ final class TransferServiceTests: XCTestCase {
         let ignoredURL = nested.appendingPathComponent("notes.txt")
         try Data("ignore".utf8).write(to: ignoredURL)
 
-        let result = try PhotoScanner(config: .fallback).scan(sourcePath: sourceRoot.path)
+        let result = try await PhotoScanner(config: .fallback).scan(sourcePath: sourceRoot.path)
 
         XCTAssertEqual(result.dateGroups.count, 1)
         XCTAssertEqual(result.dateGroups.first?.photoCount, 1)
@@ -137,7 +137,7 @@ final class TransferServiceTests: XCTestCase {
         XCTAssertEqual(result.filesByDate["2026-03-19"]?.first?.filename, "IMG_1001.JPG")
     }
 
-    func testScannerSkipsFilesAlreadyInsideOrganizedDateStructure() throws {
+    func testScannerSkipsFilesAlreadyInsideOrganizedDateStructure() async throws {
         let sourceRoot = tempRoot.appendingPathComponent("LibrarySource", isDirectory: true)
         let organizedFolder = sourceRoot.appendingPathComponent("Mom/2026/March/19/jpeg", isDirectory: true)
         let unsortedFolder = sourceRoot.appendingPathComponent("Dump", isDirectory: true)
@@ -152,7 +152,7 @@ final class TransferServiceTests: XCTestCase {
         try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: organizedJPEG.path)
         try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: unsortedJPEG.path)
 
-        let result = try PhotoScanner(config: .fallback).scan(sourcePath: sourceRoot.path)
+        let result = try await PhotoScanner(config: .fallback).scan(sourcePath: sourceRoot.path)
 
         XCTAssertEqual(result.dateGroups.count, 1)
         XCTAssertEqual(result.dateGroups.first?.photoCount, 1)

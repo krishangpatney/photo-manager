@@ -5,202 +5,223 @@ struct ContentView: View {
     @ObservedObject var viewModel: AppViewModel
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                header
-                storageSection
-                groupsSection
+        VStack(spacing: 0) {
+            topBar
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    storageSection
+                    if !viewModel.dateGroups.isEmpty || viewModel.isScanning {
+                        groupsSection
+                    }
+                }
+                .padding(24)
             }
-            .padding(28)
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Photo Manager")
-                    .font(.system(size: 32, weight: .bold))
+    // MARK: Top bar
+
+    private var topBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Photo Manager")
+                        .font(.system(size: 22, weight: .bold))
+                    Text(viewModel.workflowMode == .sdImport
+                         ? "Transfer and organize your photos from SD card to SSD"
+                         : "Pick a folder, group photos by date, and reorganize into your destination")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                }
+
                 Spacer()
-                Picker("Workflow", selection: $viewModel.workflowMode) {
+
+                Picker("", selection: $viewModel.workflowMode) {
                     ForEach(WorkflowMode.allCases) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 320)
+                .frame(width: 240)
                 .onChange(of: viewModel.workflowMode) { _, newMode in
                     viewModel.setWorkflowMode(newMode)
                 }
 
-                Button(viewModel.isScanning ? "Scanning..." : "Refresh") {
-                    viewModel.refresh()
+                Button(action: viewModel.refresh) {
+                    Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered)
                 .disabled(viewModel.isScanning || viewModel.isWorking)
+                .help("Refresh volumes")
 
-                Button(viewModel.isScanning ? "Scanning..." : viewModel.scanButtonTitle) {
-                    viewModel.scanCurrentSource()
-                }
-                .buttonStyle(.bordered)
-                .disabled(viewModel.isScanning || viewModel.isWorking || !viewModel.hasActiveSource)
-
-                if viewModel.workflowMode == .sdImport {
-                    Button("Eject SD Card") {
-                        viewModel.ejectSourceCard()
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(viewModel.sourceVolume == nil || viewModel.isScanning || viewModel.isWorking)
-                }
-
-                Button(viewModel.isWorking ? "Transferring..." : transferButtonTitle) {
+                Button(viewModel.isWorking ? "Transferring…" : transferButtonTitle) {
                     viewModel.startTransfer()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.isWorking || viewModel.isScanning || viewModel.selectedDateCount == 0 || viewModel.selectedDestination.isEmpty)
             }
-            Text(viewModel.workflowMode == .sdImport
-                 ? "Transfer and organize your photos from SD card to SSD"
-                 : "Pick a folder source, group photos by date, and reorganize them into your destination")
-                .font(.system(size: 17))
-                .foregroundStyle(.secondary)
+
+            statusPill
+        }
+        .padding(.leading, 80)
+        .padding(.trailing, 60)
+        .padding(.top, 12)
+        .padding(.bottom, 14)
+    }
+
+    @ViewBuilder
+    private var statusPill: some View {
+        if viewModel.isWorking {
+            HStack(spacing: 8) {
+                ProgressView(value: viewModel.transferProgressFraction)
+                    .frame(width: 100)
+                Text(viewModel.transferDetailText.isEmpty ? "Transferring…" : viewModel.transferDetailText)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+            }
+        } else if viewModel.isScanning {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text(viewModel.scanDetailText.isEmpty ? "Scanning…" : viewModel.scanDetailText)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+            }
+        } else if !viewModel.statusText.isEmpty {
             Text(viewModel.statusText)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.primary)
-            if viewModel.isScanning && !viewModel.scanDetailText.isEmpty {
-                Text(viewModel.scanDetailText)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
-            if viewModel.isWorking {
-                VStack(alignment: .leading, spacing: 8) {
-                    ProgressView(value: viewModel.transferProgressFraction)
-                        .tint(.blue)
-                    if !viewModel.transferDetailText.isEmpty {
-                        Text(viewModel.transferDetailText)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: 520)
-            }
-            if !viewModel.lastTransferSummaryText.isEmpty && !viewModel.isWorking {
-                Text(viewModel.lastTransferSummaryText)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            if viewModel.ignoredScanFileCount > 0 {
-                Text("Ignored \(viewModel.ignoredScanFileCount) file(s) already inside an organized date folder during the last scan.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
-            if !viewModel.hasScannedCurrentCard, viewModel.hasActiveSource {
-                Text(viewModel.workflowMode == .sdImport
-                     ? "We only detect the card at insert time now. Click Scan SD Card when you actually want to load the shoot dates."
-                     : "Reorganize mode never scans whole drives automatically. Pick the source folder you want, then click Scan Folder when you're ready.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
     }
 
     private var transferButtonTitle: String {
         switch viewModel.selectedDateCount {
-        case 0:
-            return "Transfer Selected Days"
-        case 1:
-            return "Transfer Selected Day"
-        default:
-            return "Transfer Selected Days (\(viewModel.selectedDateCount))"
+        case 0: return "Transfer"
+        case 1: return "Transfer 1 Day"
+        default: return "Transfer \(viewModel.selectedDateCount) Days"
         }
     }
+
+    // MARK: Storage section
 
     private var storageSection: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Select Storage Devices")
-                .font(.system(size: 18, weight: .semibold))
-
-            HStack(alignment: .top, spacing: 18) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(viewModel.activeSourceTitle)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    if viewModel.workflowMode == .sdImport {
-                        if !viewModel.sourceVolumes.isEmpty {
-                            ScrollView {
-                                LazyVStack(spacing: 12) {
-                                    ForEach(viewModel.sourceVolumes) { volume in
-                                        StorageCard(
-                                            volume: volume,
-                                            isSelected: viewModel.sourceVolume?.path == volume.path,
-                                            actionTitle: "Use This Card"
-                                        ) {
-                                            viewModel.selectSource(volume.path)
-                                        }
-                                    }
-                                }
-                            }
-                            .frame(height: 250)
-                        } else {
-                            EmptyStorageCard(message: "No likely source card detected yet")
-                        }
-                    } else {
-                        FolderSourceCard(
-                            source: viewModel.reorganizeSource,
-                            action: viewModel.chooseReorganizeSourceFolder
-                        )
-                    }
-                }
-
-                Image(systemName: "arrow.right")
-                    .font(.title2)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 52)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text("Destination")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Choose Folder") {
-                            viewModel.chooseDestinationFolder()
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-
-                    ScrollView {
-                        LazyVStack(spacing: 12) {
-                            ForEach(viewModel.destinationVolumes) { volume in
-                                StorageCard(
-                                    volume: volume,
-                                    isSelected: viewModel.selectedDestination == volume.path,
-                                    actionTitle: "Use This Drive"
-                                ) {
-                                    viewModel.selectDestination(volume.path)
-                                }
-                            }
-                        }
-                    }
-                    .frame(height: 250)
-                }
-            }
+        HStack(alignment: .top, spacing: 16) {
+            sourceColumn
+            Image(systemName: "arrow.right")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                .padding(.top, 46)
+            destinationColumn
         }
-        .padding(22)
-        .background(.white)
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.black.opacity(0.06), lineWidth: 1)
-        )
+        .padding(20)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    private var groupsSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Shoot Dates")
-                .font(.system(size: 18, weight: .semibold))
+    private var sourceColumn: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label(viewModel.activeSourceTitle, systemImage: viewModel.workflowMode == .sdImport ? "sdcard" : "folder")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(viewModel.isScanning ? "Scanning…" : viewModel.scanButtonTitle) {
+                    viewModel.scanCurrentSource()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(viewModel.isScanning || viewModel.isWorking || !viewModel.hasActiveSource)
 
-            LazyVStack(spacing: 18) {
+                if viewModel.workflowMode == .sdImport {
+                    Button("Eject") { viewModel.ejectSourceCard() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(viewModel.sourceVolume == nil || viewModel.isScanning || viewModel.isWorking)
+                }
+            }
+
+            if viewModel.workflowMode == .sdImport {
+                if viewModel.sourceVolumes.isEmpty {
+                    emptyVolumeCard(message: "No SD card detected")
+                } else {
+                    ScrollView {
+                        VStack(spacing: 8) {
+                            ForEach(viewModel.sourceVolumes) { volume in
+                                CompactVolumeCard(
+                                    volume: volume,
+                                    isSelected: viewModel.sourceVolume?.path == volume.path
+                                ) { viewModel.selectSource(volume.path) }
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 220)
+                }
+            } else {
+                FolderSourceCard(source: viewModel.reorganizeSource, action: viewModel.chooseReorganizeSourceFolder)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var destinationColumn: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Destination", systemImage: "externaldrive")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Choose Folder") { viewModel.chooseDestinationFolder() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(viewModel.destinationVolumes) { volume in
+                        CompactVolumeCard(
+                            volume: volume,
+                            isSelected: viewModel.selectedDestination == volume.path
+                        ) { viewModel.selectDestination(volume.path) }
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func emptyVolumeCard(message: String) -> some View {
+        Text(message)
+            .font(.system(size: 13))
+            .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+            .frame(maxWidth: .infinity, minHeight: 72, alignment: .center)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    // MARK: Groups section
+
+    private var groupsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Shoot Dates")
+                    .font(.system(size: 15, weight: .semibold))
+                if viewModel.ignoredScanFileCount > 0 {
+                    Text("\(viewModel.ignoredScanFileCount) already organized, skipped")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .clipShape(Capsule())
+                }
+            }
+
+            LazyVStack(spacing: 10) {
                 ForEach($viewModel.dateGroups) { $group in
                     DateGroupCard(
                         group: $group,
@@ -214,7 +235,8 @@ struct ContentView: View {
                         onRevealInFinder: { viewModel.revealInFinder(for: group.dateKey) },
                         onOpenFirstJPEG: { viewModel.openFirstJPEG(for: group.dateKey) },
                         onTransferThisDay: { viewModel.transferDateGroup(group.id) },
-                        onToggleSelect: { viewModel.toggleSelected(group.id) }
+                        onToggleSelect: { viewModel.toggleSelected(group.id) },
+                        onTogglePhotoIncluded: { viewModel.togglePhotoIncluded(dateGroupID: group.id, photoID: $0) }
                     )
                 }
             }
@@ -222,94 +244,94 @@ struct ContentView: View {
     }
 }
 
-private struct StorageCard: View {
+// MARK: - Compact volume card
+
+private struct CompactVolumeCard: View {
     let volume: VolumeOption
     let isSelected: Bool
-    let actionTitle: String?
-    let action: () -> Void
+    let onSelect: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(volume.name)
-                        .font(.system(size: 16, weight: .semibold))
+        Button(action: onSelect) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        if isSelected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.blue)
+                                .font(.system(size: 13))
+                        }
+                        Text(volume.name)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Color(nsColor: .labelColor))
+                    }
                     Text(volume.path)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        .lineLimit(1)
+                    ProgressView(value: volume.usageFraction)
+                        .tint(isSelected ? .blue : Color(nsColor: .quaternaryLabelColor))
+                        .padding(.top, 2)
+                    Text(volume.freeText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
                 }
                 Spacer()
-                Text(volume.freeText)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.secondary)
             }
-
-            ProgressView(value: volume.usageFraction)
-                .tint(isSelected ? .blue : .blue.opacity(0.7))
-
-            Text(volume.usageText)
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-
-            if let actionTitle {
-                Button(actionTitle, action: action)
-                    .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding(18)
-        .background(isSelected ? Color.blue.opacity(0.08) : .white)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(isSelected ? Color.blue : Color.black.opacity(0.08), lineWidth: isSelected ? 2 : 1)
-        )
-    }
-}
-
-private struct EmptyStorageCard: View {
-    let message: String
-
-    var body: some View {
-        Text(message)
-            .font(.system(size: 15))
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, minHeight: 140)
-            .background(Color.white)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(isSelected ? Color.blue.opacity(0.07) : Color(nsColor: .windowBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isSelected ? Color.blue.opacity(0.4) : Color(nsColor: .separatorColor), lineWidth: 1)
             )
+        }
+        .buttonStyle(.plain)
     }
 }
+
+// MARK: - Folder source card
 
 private struct FolderSourceCard: View {
     let source: FolderSource?
     let action: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(source?.name ?? "No source folder selected")
-                .font(.system(size: 16, weight: .semibold))
-
-            Text(source?.path ?? "Choose the exact folder you want the app to scan and reorganize.")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-
-            Button(source == nil ? "Choose Source Folder" : "Choose Different Folder", action: action)
-                .buttonStyle(.borderedProminent)
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: "folder.fill")
+                    .foregroundStyle(source != nil ? .blue : Color(nsColor: .tertiaryLabelColor))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(source?.name ?? "Choose source folder")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color(nsColor: .labelColor))
+                    if let path = source?.path {
+                        Text(path)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+            )
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, minHeight: 140, alignment: .leading)
-        .background(.white)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.black.opacity(0.08), lineWidth: 1)
-        )
+        .buttonStyle(.plain)
     }
 }
+
+// MARK: - Date group card
 
 private struct DateGroupCard: View {
     @Binding var group: DateGroup
@@ -324,167 +346,189 @@ private struct DateGroupCard: View {
     let onOpenFirstJPEG: () -> Void
     let onTransferThisDay: () -> Void
     let onToggleSelect: () -> Void
+    let onTogglePhotoIncluded: (PhotoPreview.ID) -> Void
 
-    private var mediaStatusText: String {
-        group.jpegCount > 0 ? "\(group.jpegCount) previewable JPEGs" : "RAW-only date"
-    }
+    @State private var isReviewing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 14) {
-                    Button(action: onToggle) {
-                        Image(systemName: group.isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.plain)
+            // Main row
+            HStack(alignment: .center, spacing: 12) {
+                Button(action: onToggle) {
+                    Image(systemName: group.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        .frame(width: 20, height: 20)
+                }
+                .buttonStyle(.plain)
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(group.displayDate)
-                            .font(.system(size: 18, weight: .semibold))
-                            .fixedSize(horizontal: false, vertical: true)
-                        HStack(spacing: 10) {
-                            Text(group.subtitle)
-                                .font(.system(size: 14))
-                                .foregroundStyle(.secondary)
-                            Text(mediaStatusText)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 4)
-                                .background(Color.black.opacity(0.04))
-                                .clipShape(Capsule())
+                // Date + stats
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(group.displayDate)
+                        .font(.system(size: 14, weight: .semibold))
+                    HStack(spacing: 6) {
+                        Text(group.subtitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        if group.excludedCount > 0 {
+                            Text("\(group.excludedCount) excluded")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.orange)
                         }
                     }
-
-                    Spacer()
                 }
 
-                HStack(alignment: .center, spacing: 12) {
-                    FolderInputControl(
-                        folderName: $group.folderName,
-                        folderOptions: folderOptions,
-                        onUseExistingFolder: onUseExistingFolder
-                    )
-                    .frame(width: 360)
+                Spacer()
 
-                    Button("Open in Finder", action: onRevealInFinder)
-                        .buttonStyle(.bordered)
+                // Folder input
+                FolderInputControl(
+                    folderName: $group.folderName,
+                    folderOptions: folderOptions,
+                    onUseExistingFolder: onUseExistingFolder
+                )
+                .frame(width: 200)
 
-                    if !group.previews.isEmpty {
-                        Button("Open First JPEG", action: onOpenFirstJPEG)
-                            .buttonStyle(.bordered)
+                // Actions
+                if !group.previews.isEmpty {
+                    Button(action: { isReviewing = true }) {
+                        Image(systemName: "eye")
                     }
-
-                    Spacer(minLength: 0)
-
-                    Button("Transfer This Day", action: onTransferThisDay)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(isWorking || !hasDestination)
-
-                    if group.isSelected {
-                        Button("Selected", action: onToggleSelect)
-                            .buttonStyle(.borderedProminent)
-                            .disabled(isWorking)
-                    } else {
-                        Button("Select Day", action: onToggleSelect)
-                            .buttonStyle(.bordered)
-                            .disabled(isWorking)
+                    .buttonStyle(.bordered)
+                    .disabled(isWorking)
+                    .help("Review photos")
+                    .sheet(isPresented: $isReviewing) {
+                        PhotoReviewSheet(group: group, onToggle: onTogglePhotoIncluded)
                     }
                 }
+
+                Button(action: onToggleSelect) {
+                    Image(systemName: group.isSelected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(group.isSelected ? .blue : Color(nsColor: .tertiaryLabelColor))
+                }
+                .buttonStyle(.plain)
+                .disabled(isWorking)
+                .help(group.isSelected ? "Deselect" : "Select for batch transfer")
+
+                Button("Transfer", action: onTransferThisDay)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(isWorking || !hasDestination)
             }
-            .padding(18)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
 
+            // Expanded details
             if group.isExpanded {
                 Divider()
+                    .padding(.horizontal, 16)
 
-                VStack(alignment: .leading, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Selected Folder")
-                            .font(.system(size: 14, weight: .semibold))
-                        Text(resolvedFolderName)
-                            .font(.system(size: 13, weight: .medium))
-                        Text(destinationPreviewPath)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.blue.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                    if !group.previews.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Representative JPEG")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text(group.previews[0].filename)
-                                .font(.system(size: 13, weight: .medium))
-                            Text("Use Open First JPEG or Open in Finder to inspect the files without slowing down the import screen.")
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(spacing: 10) {
+                        Button("Open in Finder", action: onRevealInFinder)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        if !group.previews.isEmpty {
+                            Button("Open First JPEG", action: onOpenFirstJPEG)
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                         }
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.black.opacity(0.03))
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
 
-                    Text("Use the folder control in the top row to type a new folder name or pick an existing one.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                    if !destinationPreviewPath.isEmpty {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Destination path")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                            Text(destinationPreviewPath)
+                                .font(.system(size: 11).monospaced())
+                                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                                .textSelection(.enabled)
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
                 }
-                .padding(18)
+                .padding(16)
             }
         }
-        .background(.white)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(group.isSelected ? Color.blue.opacity(0.04) : Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(group.isSelected ? Color.blue.opacity(0.55) : Color.black.opacity(0.06), lineWidth: group.isSelected ? 2 : 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(group.isSelected ? Color.blue.opacity(0.35) : Color(nsColor: .separatorColor), lineWidth: 1)
         )
     }
 }
+
+// MARK: - Folder input control
 
 private struct FolderInputControl: View {
     @Binding var folderName: String
     let folderOptions: [String]
     let onUseExistingFolder: (String) -> Void
 
+    @State private var showPopover = false
+
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "folder")
-                .foregroundStyle(.secondary)
+        HStack(spacing: 0) {
+            // Text field area
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
 
-            TextField("New Folder", text: $folderName)
-                .textFieldStyle(.plain)
-                .font(.system(size: 15))
-                .lineLimit(1)
+                TextField("Folder or Folder/Subfolder", text: $folderName)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
 
-            Menu {
-                if folderOptions.isEmpty {
-                    Text("No existing folders yet")
-                } else {
-                    ForEach(folderOptions, id: \.self) { folder in
-                        Button(folder) {
-                            onUseExistingFolder(folder)
+            // Dropdown button — only when there are existing folders
+            if !folderOptions.isEmpty {
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(width: 1)
+                    .padding(.vertical, 6)
+
+                Button(action: { showPopover.toggle() }) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        .frame(width: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showPopover, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(folderOptions, id: \.self) { folder in
+                            Button(action: {
+                                onUseExistingFolder(folder)
+                                showPopover = false
+                            }) {
+                                Text(folder)
+                                    .font(.system(size: 13))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
+                    .padding(.vertical, 6)
+                    .frame(minWidth: 200)
                 }
-            } label: {
-                Color.clear
-                    .frame(width: 14, height: 14)
             }
-            .menuStyle(.borderlessButton)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(Color.black.opacity(0.03))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color(nsColor: .windowBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
         )
     }
 }
