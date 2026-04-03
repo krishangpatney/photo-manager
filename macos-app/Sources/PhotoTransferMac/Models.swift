@@ -1,5 +1,28 @@
 import Foundation
 
+struct Coordinate: Hashable, Sendable {
+    let latitude: Double
+    let longitude: Double
+}
+
+enum FolderStructure: String, CaseIterable, Identifiable, Sendable {
+    case yearMonthDay
+    case yearMonth
+    case year
+    case flat
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .yearMonthDay: return "Year / Month / Day"
+        case .yearMonth: return "Year / Month"
+        case .year: return "Year only"
+        case .flat: return "No date subfolders"
+        }
+    }
+}
+
 enum WorkflowMode: String, CaseIterable, Identifiable, Sendable {
     case sdImport
     case reorganizeFolder
@@ -101,6 +124,7 @@ struct PhotoFile: Hashable, Sendable {
     let fileSize: Int64
     let isRaw: Bool
     var isIncluded: Bool = true
+    var coordinate: Coordinate? = nil
 }
 
 struct PhotoPreview: Identifiable, Hashable, Sendable {
@@ -134,10 +158,12 @@ struct DateGroup: Identifiable, Hashable, Sendable {
     var previews: [PhotoPreview]
     // number of RAW files that have no paired JPEG (never shown in review, always included)
     let rawOnlyCount: Int
+    // GPS coordinate from the first photo in this group that has location data
+    let representativeCoordinate: Coordinate?
     var isExpanded: Bool
     var isSelected: Bool
 
-    init(dateKey: String, displayDate: String, photoCount: Int, rawCount: Int, jpegCount: Int, totalBytes: Int64, folderName: String, previews: [PhotoPreview], rawOnlyCount: Int = 0, isExpanded: Bool, isSelected: Bool = false) {
+    init(dateKey: String, displayDate: String, photoCount: Int, rawCount: Int, jpegCount: Int, totalBytes: Int64, folderName: String, previews: [PhotoPreview], rawOnlyCount: Int = 0, representativeCoordinate: Coordinate? = nil, isExpanded: Bool, isSelected: Bool = false) {
         self.id = dateKey
         self.dateKey = dateKey
         self.displayDate = displayDate
@@ -148,6 +174,7 @@ struct DateGroup: Identifiable, Hashable, Sendable {
         self.folderName = folderName
         self.previews = previews
         self.rawOnlyCount = rawOnlyCount
+        self.representativeCoordinate = representativeCoordinate
         self.isExpanded = isExpanded
         self.isSelected = isSelected
     }

@@ -186,6 +186,114 @@ final class TransferServiceTests: XCTestCase {
         XCTAssertFalse(viewModel.hasScannedCurrentCard)
     }
 
+    func testTransferRespectsYearMonthFolderStructure() async throws {
+        let date = makeDate(year: 2026, month: 5, day: 14)
+        let rawSource = try makeSourceFile(named: "IMG_0001.RAF", contents: "raw-data")
+        let destinationRoot = tempRoot.appendingPathComponent("Destination", isDirectory: true)
+        try FileManager.default.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
+
+        let filesByDate = [
+            "2026-05-14": [
+                PhotoFile(sourcePath: rawSource.path, filename: "IMG_0001.RAF", photoDate: date, fileSize: 8, isRaw: true)
+            ]
+        ]
+        let dateGroups = [
+            DateGroup(
+                dateKey: "2026-05-14",
+                displayDate: "Thursday, May 14, 2026",
+                photoCount: 1,
+                rawCount: 1,
+                jpegCount: 0,
+                totalBytes: 8,
+                folderName: "Spring",
+                previews: [],
+                isExpanded: false
+            )
+        ]
+
+        _ = try await TransferService().transfer(
+            filesByDate: filesByDate,
+            dateGroups: dateGroups,
+            destinationRoot: destinationRoot.path,
+            folderStructure: .yearMonth
+        )
+
+        let expected = destinationRoot.appendingPathComponent("Spring/2026/May/raw/IMG_0001.RAF")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: expected.path))
+    }
+
+    func testTransferRespectsYearOnlyFolderStructure() async throws {
+        let date = makeDate(year: 2026, month: 5, day: 14)
+        let jpegSource = try makeSourceFile(named: "IMG_0002.JPG", contents: "jpeg-data")
+        let destinationRoot = tempRoot.appendingPathComponent("Destination2", isDirectory: true)
+        try FileManager.default.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
+
+        let filesByDate = [
+            "2026-05-14": [
+                PhotoFile(sourcePath: jpegSource.path, filename: "IMG_0002.JPG", photoDate: date, fileSize: 9, isRaw: false)
+            ]
+        ]
+        let dateGroups = [
+            DateGroup(
+                dateKey: "2026-05-14",
+                displayDate: "Thursday, May 14, 2026",
+                photoCount: 1,
+                rawCount: 0,
+                jpegCount: 1,
+                totalBytes: 9,
+                folderName: "Spring",
+                previews: [],
+                isExpanded: false
+            )
+        ]
+
+        _ = try await TransferService().transfer(
+            filesByDate: filesByDate,
+            dateGroups: dateGroups,
+            destinationRoot: destinationRoot.path,
+            folderStructure: .year
+        )
+
+        let expected = destinationRoot.appendingPathComponent("Spring/2026/jpeg/IMG_0002.JPG")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: expected.path))
+    }
+
+    func testTransferRespectsFlatFolderStructure() async throws {
+        let date = makeDate(year: 2026, month: 5, day: 14)
+        let jpegSource = try makeSourceFile(named: "IMG_0003.JPG", contents: "jpeg-data")
+        let destinationRoot = tempRoot.appendingPathComponent("Destination3", isDirectory: true)
+        try FileManager.default.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
+
+        let filesByDate = [
+            "2026-05-14": [
+                PhotoFile(sourcePath: jpegSource.path, filename: "IMG_0003.JPG", photoDate: date, fileSize: 9, isRaw: false)
+            ]
+        ]
+        let dateGroups = [
+            DateGroup(
+                dateKey: "2026-05-14",
+                displayDate: "Thursday, May 14, 2026",
+                photoCount: 1,
+                rawCount: 0,
+                jpegCount: 1,
+                totalBytes: 9,
+                folderName: "Spring",
+                previews: [],
+                isExpanded: false
+            )
+        ]
+
+        _ = try await TransferService().transfer(
+            filesByDate: filesByDate,
+            dateGroups: dateGroups,
+            destinationRoot: destinationRoot.path,
+            folderStructure: .flat
+        )
+
+        let expected = destinationRoot.appendingPathComponent("Spring/jpeg/IMG_0003.JPG")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: expected.path))
+    }
+
     private func makeSourceFile(named name: String, contents: String) throws -> URL {
         let sourceDir = tempRoot.appendingPathComponent("Source", isDirectory: true)
         try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
