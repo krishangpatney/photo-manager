@@ -100,6 +100,7 @@ struct PhotoFile: Hashable, Sendable {
     let photoDate: Date
     let fileSize: Int64
     let isRaw: Bool
+    var isIncluded: Bool = true
 }
 
 struct PhotoPreview: Identifiable, Hashable, Sendable {
@@ -107,12 +108,16 @@ struct PhotoPreview: Identifiable, Hashable, Sendable {
     let path: String?
     let filename: String
     let bytes: Int64
+    // base filename without extension — used to link a JPEG preview to its RAW pair
+    let pairedKey: String?
+    var isIncluded: Bool = true
 
-    init(path: String?, filename: String, bytes: Int64) {
+    init(path: String?, filename: String, bytes: Int64, pairedKey: String? = nil) {
         self.id = path ?? filename
         self.path = path
         self.filename = filename
         self.bytes = bytes
+        self.pairedKey = pairedKey
     }
 }
 
@@ -125,11 +130,14 @@ struct DateGroup: Identifiable, Hashable, Sendable {
     let jpegCount: Int
     let totalBytes: Int64
     var folderName: String
-    let previews: [PhotoPreview]
+    // full list of JPEG previews for the review sheet; RAW-only files are not included here
+    var previews: [PhotoPreview]
+    // number of RAW files that have no paired JPEG (never shown in review, always included)
+    let rawOnlyCount: Int
     var isExpanded: Bool
     var isSelected: Bool
 
-    init(dateKey: String, displayDate: String, photoCount: Int, rawCount: Int, jpegCount: Int, totalBytes: Int64, folderName: String, previews: [PhotoPreview], isExpanded: Bool, isSelected: Bool = false) {
+    init(dateKey: String, displayDate: String, photoCount: Int, rawCount: Int, jpegCount: Int, totalBytes: Int64, folderName: String, previews: [PhotoPreview], rawOnlyCount: Int = 0, isExpanded: Bool, isSelected: Bool = false) {
         self.id = dateKey
         self.dateKey = dateKey
         self.displayDate = displayDate
@@ -139,12 +147,17 @@ struct DateGroup: Identifiable, Hashable, Sendable {
         self.totalBytes = totalBytes
         self.folderName = folderName
         self.previews = previews
+        self.rawOnlyCount = rawOnlyCount
         self.isExpanded = isExpanded
         self.isSelected = isSelected
     }
 
     var subtitle: String {
         "\(photoCount) photos • \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file))"
+    }
+
+    var excludedCount: Int {
+        previews.filter { !$0.isIncluded }.count
     }
 }
 

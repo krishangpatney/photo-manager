@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import ImageIO
 
@@ -165,99 +166,157 @@ struct PhotoScanner {
         return formatter
     }()
 
-    func scan(sourcePath: String, onProgress: ((ScanProgress) -> Void)? = nil) throws -> PhotoScanResult {
-        let fileManager = FileManager.default
-        guard let enumerator = fileManager.enumerator(
-            at: URL(fileURLWithPath: sourcePath, isDirectory: true),
-            includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey, .fileSizeKey],
-            options: [.skipsHiddenFiles],
-            errorHandler: { _, _ in true }
-        ) else {
-            return PhotoScanResult(filesByDate: [:], dateGroups: [], ignoredAlreadyOrganizedCount: 0)
-        }
+    // Intermediate type used between enumeration and EXIF phases
+    private struct CandidateFile {
+        let url: URL
+        let fileSize: Int64
+        let modDate: Date?
+        let isRaw: Bool
+    }
 
-        var grouped: [String: [PhotoFile]] = [:]
-        var ignoredAlreadyOrganizedCount = 0
-        var scannedCount = 0
-        var groupedFileCount = 0
-        var lastReportedCount = 0
-        for case let url as URL in enumerator {
-            autoreleasepool {
-                let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey, .fileSizeKey])
-                if values?.isDirectory == true {
-                    if [".Trashes", ".Spotlight-V100", ".fseventsd"].contains(url.lastPathComponent) {
-                        enumerator.skipDescendants()
+    func scan(sourcePath: String, onProgress: ((ScanProgress) -> Void)? = nil) async throws -> PhotoScanResult {
+        // ── Phase 1: enumerate the directory tree (sequential, fast — just stat calls) ──
+        // Run on a detached task so the synchronous NSDirectoryEnumerator doesn't block the cooperative pool.
+        let (candidates, ignoredAlreadyOrganizedCount): ([CandidateFile], Int) = await Task.detached(priority: .userInitiated) { [config] in
+            let fileManager = FileManager.default
+            guard let enumerator = fileManager.enumerator(
+                at: URL(fileURLWithPath: sourcePath, isDirectory: true),
+                includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey, .fileSizeKey],
+                options: [.skipsHiddenFiles],
+                errorHandler: { _, _ in true }
+            ) else {
+                return ([], 0)
+            }
+
+            var candidates: [CandidateFile] = []
+            var ignoredCount = 0
+
+            for case let url as URL in enumerator {
+                autoreleasepool {
+                    let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey, .fileSizeKey])
+                    if values?.isDirectory == true {
+                        if [".Trashes", ".Spotlight-V100", ".fseventsd"].contains(url.lastPathComponent) {
+                            enumerator.skipDescendants()
+                        }
+                        if Self.isOrganizedMediaDirectoryStatic(url: url, sourceRoot: sourcePath) {
+                            ignoredCount += Self.countSupportedPhotosStatic(in: url, config: config)
+                            enumerator.skipDescendants()
+                        }
+                        return
                     }
-                    if isOrganizedMediaDirectory(url: url, sourceRoot: sourcePath) {
-                        ignoredAlreadyOrganizedCount += countSupportedPhotos(in: url)
-                        enumerator.skipDescendants()
+
+                    let ext = "." + url.pathExtension.lowercased()
+                    let isRaw = config.supportedRawExtensions.contains(ext)
+                    let isJPEG = config.supportedJpegExtensions.contains(ext)
+                    guard isRaw || isJPEG else { return }
+
+                    if Self.isAlreadyOrganizedPhotoStatic(url: url, sourceRoot: sourcePath) {
+                        ignoredCount += 1
+                        return
                     }
-                    return
-                }
 
-                let ext = "." + url.pathExtension.lowercased()
-                let isRaw = config.supportedRawExtensions.contains(ext)
-                let isJPEG = config.supportedJpegExtensions.contains(ext)
-                if !isRaw && !isJPEG {
-                    return
+                    candidates.append(CandidateFile(
+                        url: url,
+                        fileSize: Int64(values?.fileSize ?? 0),
+                        modDate: values?.contentModificationDate,
+                        isRaw: isRaw
+                    ))
                 }
+            }
+            return (candidates, ignoredCount)
+        }.value
 
-                if isAlreadyOrganizedPhoto(url: url, sourceRoot: sourcePath) {
-                    ignoredAlreadyOrganizedCount += 1
-                    scannedCount += 1
-                    reportProgressIfNeeded(
-                        onProgress: onProgress,
-                        scannedCount: scannedCount,
-                        groupedFileCount: groupedFileCount,
-                        ignoredAlreadyOrganizedCount: ignoredAlreadyOrganizedCount,
-                        lastReportedCount: &lastReportedCount
+        // ── Phase 2: read EXIF dates in parallel (the slow part) ──
+        // Each task gets its own formatter — DateFormatter is not thread-safe.
+        let exifWorkerCount = min(candidates.count, max(ProcessInfo.processInfo.activeProcessorCount * 2, 8))
+        var resolved: [PhotoFile] = Array(repeating: PhotoFile(sourcePath: "", filename: "", photoDate: Date(), fileSize: 0, isRaw: false), count: candidates.count)
+        var completed = 0
+        let reportInterval = max(progressUpdateInterval, candidates.count / 20)
+
+        await withTaskGroup(of: (Int, PhotoFile).self) { group in
+            var nextIndex = 0
+
+            func scheduleNext() {
+                guard nextIndex < candidates.count else { return }
+                let i = nextIndex
+                let c = candidates[i]
+                nextIndex += 1
+                group.addTask {
+                    let photoDate = Self.readPhotoDateStatic(from: c.url) ?? c.modDate ?? Date()
+                    let file = PhotoFile(
+                        sourcePath: c.url.path,
+                        filename: c.url.lastPathComponent,
+                        photoDate: photoDate,
+                        fileSize: c.fileSize,
+                        isRaw: c.isRaw
                     )
-                    return
+                    return (i, file)
                 }
+            }
 
-                let photoDate = readPhotoDate(from: url) ?? values?.contentModificationDate ?? Date()
-                let file = PhotoFile(
-                    sourcePath: url.path,
-                    filename: url.lastPathComponent,
-                    photoDate: photoDate,
-                    fileSize: Int64(values?.fileSize ?? 0),
-                    isRaw: isRaw
-                )
-                grouped[dateKey(for: photoDate), default: []].append(file)
-                scannedCount += 1
-                groupedFileCount += 1
-                reportProgressIfNeeded(
-                    onProgress: onProgress,
-                    scannedCount: scannedCount,
-                    groupedFileCount: groupedFileCount,
-                    ignoredAlreadyOrganizedCount: ignoredAlreadyOrganizedCount,
-                    lastReportedCount: &lastReportedCount
-                )
+            for _ in 0..<exifWorkerCount { scheduleNext() }
+
+            while let (i, file) = await group.next() {
+                resolved[i] = file
+                completed += 1
+                if completed % reportInterval == 0 || completed == candidates.count {
+                    onProgress?(ScanProgress(
+                        scannedCount: completed + ignoredAlreadyOrganizedCount,
+                        groupedFileCount: completed,
+                        ignoredAlreadyOrganizedCount: ignoredAlreadyOrganizedCount
+                    ))
+                }
+                scheduleNext()
             }
         }
 
+        // ── Phase 3: group by date (sequential, trivial) ──
+        var grouped: [String: [PhotoFile]] = [:]
+        for file in resolved where !file.sourcePath.isEmpty {
+            grouped[dateKey(for: file.photoDate), default: []].append(file)
+        }
+
         onProgress?(ScanProgress(
-            scannedCount: scannedCount,
-            groupedFileCount: groupedFileCount,
+            scannedCount: candidates.count + ignoredAlreadyOrganizedCount,
+            groupedFileCount: candidates.count,
             ignoredAlreadyOrganizedCount: ignoredAlreadyOrganizedCount
         ))
 
         let keys = grouped.keys.sorted()
         let groups = keys.enumerated().map { offset, key in
             let files = grouped[key, default: []]
-            let rawCount = files.filter(\.isRaw).count
+            let rawFiles = files.filter(\.isRaw)
             let jpegFiles = files.filter { !$0.isRaw }
+
+            // build a set of base names that have a JPEG so we can detect RAW-only files
+            let jpegBaseNames = Set(jpegFiles.map { baseName(of: $0.filename) })
+            let rawOnlyCount = rawFiles.filter { !jpegBaseNames.contains(baseName(of: $0.filename)) }.count
+
+            // full JPEG preview list for review, sorted by filename
+            // pairedKey links each JPEG to its RAW counterpart (same base name)
+            let rawBaseNames = Set(rawFiles.map { baseName(of: $0.filename) })
+            let allPreviews: [PhotoPreview] = jpegFiles
+                .sorted { $0.filename < $1.filename }
+                .map { jpeg in
+                    let base = baseName(of: jpeg.filename)
+                    return PhotoPreview(
+                        path: jpeg.sourcePath,
+                        filename: jpeg.filename,
+                        bytes: jpeg.fileSize,
+                        pairedKey: rawBaseNames.contains(base) ? base : nil
+                    )
+                }
+
             return DateGroup(
                 dateKey: key,
                 displayDate: displayDate(for: files.first?.photoDate ?? Date()),
                 photoCount: files.count,
-                rawCount: rawCount,
+                rawCount: rawFiles.count,
                 jpegCount: jpegFiles.count,
                 totalBytes: files.reduce(0) { $0 + $1.fileSize },
                 folderName: "",
-                previews: jpegFiles.prefix(1).map {
-                    PhotoPreview(path: $0.sourcePath, filename: $0.filename, bytes: $0.fileSize)
-                },
+                previews: allPreviews,
+                rawOnlyCount: rawOnlyCount,
                 isExpanded: false,
                 isSelected: false
             )
@@ -270,10 +329,11 @@ struct PhotoScanner {
         )
     }
 
-    private func readPhotoDate(from url: URL) -> Date? {
+    // Static + creates its own formatter so it's safe to call from concurrent tasks
+    private static func readPhotoDateStatic(from url: URL) -> Date? {
         let options: CFDictionary = [
             kCGImageSourceShouldCache: false,
-            kCGImageSourceShouldCacheImmediately: false
+            kCGImageSourceShouldCacheImmediately: false,
         ] as CFDictionary
 
         guard let source = CGImageSourceCreateWithURL(url as CFURL, options),
@@ -281,23 +341,32 @@ struct PhotoScanner {
             return nil
         }
 
+        let formatter = makeDateFormatter()
+
         if let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any],
            let value = exif[kCGImagePropertyExifDateTimeOriginal] as? String,
-           let parsed = parseExifDate(value) {
+           let parsed = formatter.date(from: value) {
             return parsed
         }
 
         if let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any],
            let value = tiff[kCGImagePropertyTIFFDateTime] as? String,
-           let parsed = parseExifDate(value) {
+           let parsed = formatter.date(from: value) {
             return parsed
         }
 
         return nil
     }
 
-    private func parseExifDate(_ value: String) -> Date? {
-        Self.exifDateFormatter.date(from: value)
+    private static func makeDateFormatter() -> DateFormatter {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }
+
+    private func baseName(of filename: String) -> String {
+        URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
     }
 
     private func dateKey(for date: Date) -> String {
@@ -325,7 +394,7 @@ struct PhotoScanner {
         ))
     }
 
-    private func isOrganizedMediaDirectory(url: URL, sourceRoot: String) -> Bool {
+    private static func isOrganizedMediaDirectoryStatic(url: URL, sourceRoot: String) -> Bool {
         let rootURL = URL(fileURLWithPath: sourceRoot, isDirectory: true)
         let standardizedRoot = rootURL.standardizedFileURL.path
         let standardizedPath = url.standardizedFileURL.path
@@ -353,7 +422,7 @@ struct PhotoScanner {
         return isYear && isMonth && isDay && isMediaFolder
     }
 
-    private func countSupportedPhotos(in directory: URL) -> Int {
+    private static func countSupportedPhotosStatic(in directory: URL, config: AppConfig) -> Int {
         guard let enumerator = FileManager.default.enumerator(
             at: directory,
             includingPropertiesForKeys: [.isDirectoryKey],
@@ -366,10 +435,7 @@ struct PhotoScanner {
         var count = 0
         for case let url as URL in enumerator {
             let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
-            if values?.isDirectory == true {
-                continue
-            }
-
+            if values?.isDirectory == true { continue }
             let ext = "." + url.pathExtension.lowercased()
             if config.supportedRawExtensions.contains(ext) || config.supportedJpegExtensions.contains(ext) {
                 count += 1
@@ -378,7 +444,7 @@ struct PhotoScanner {
         return count
     }
 
-    private func isAlreadyOrganizedPhoto(url: URL, sourceRoot: String) -> Bool {
+    private static func isAlreadyOrganizedPhotoStatic(url: URL, sourceRoot: String) -> Bool {
         let rootURL = URL(fileURLWithPath: sourceRoot, isDirectory: true)
         let standardizedRoot = rootURL.standardizedFileURL.path
         let standardizedPath = url.standardizedFileURL.path
@@ -435,7 +501,15 @@ struct TransferService {
         let jobs = buildJobs(filesByDate: filesByDate, dateGroups: dateGroups, destinationRoot: destinationRoot)
         let totalFiles = jobs.count
         var completed = 0
-        let workerCount = min(max(ProcessInfo.processInfo.activeProcessorCount, 4), max(totalFiles, 1), 8)
+
+        // Same-volume copies use clonefile (near-instant), so more workers is fine.
+        // Cross-volume from an SD card: SD cards read best with few concurrent readers.
+        let sourceRoot = filesByDate.values.first?.first?.sourcePath ?? destinationRoot
+        let sameVolume = onSameVolume(sourceRoot, destinationRoot)
+        let workerCount = min(
+            max(totalFiles, 1),
+            sameVolume ? 32 : min(max(ProcessInfo.processInfo.activeProcessorCount, 4), 6)
+        )
 
         try precreateDestinationDirectories(for: jobs)
 
@@ -486,7 +560,7 @@ struct TransferService {
 
         for (dateKey, files) in filesByDate {
             let folderName = folders[dateKey] ?? "Unlabeled"
-            for file in files {
+            for file in files where file.isIncluded {
                 let baseFolder = destinationFolder(root: destinationRoot, folderName: folderName, photoDate: file.photoDate)
                 let leaf = baseFolder.appendingPathComponent(file.isRaw ? "raw" : "jpeg", isDirectory: true)
                 let destination = leaf.appendingPathComponent(file.filename)
@@ -507,28 +581,46 @@ struct TransferService {
 
     private static func process(job: TransferJob) throws -> TransferJobResult {
         let fileManager = FileManager.default
+        let src = URL(fileURLWithPath: job.file.sourcePath)
+        let dst = job.destinationFile
 
-        if fileManager.fileExists(atPath: job.destinationFile.path) {
-            return TransferJobResult(
-                filename: job.file.filename,
-                copiedRawCount: 0,
-                copiedJPEGCount: 0,
-                skippedCount: 1
-            )
+        if fileManager.fileExists(atPath: dst.path) {
+            return TransferJobResult(filename: job.file.filename, copiedRawCount: 0, copiedJPEGCount: 0, skippedCount: 1)
         }
 
-        do {
-            try fileManager.copyItem(at: URL(fileURLWithPath: job.file.sourcePath), to: job.destinationFile)
-        } catch let error as NSError {
-            if error.domain == NSCocoaErrorDomain && error.code == NSFileWriteFileExistsError {
-                return TransferJobResult(
-                    filename: job.file.filename,
-                    copiedRawCount: 0,
-                    copiedJPEGCount: 0,
-                    skippedCount: 1
-                )
+        // Try clonefile first — on APFS same-volume this is copy-on-write (near-instant).
+        // Falls back to a regular copy for cross-volume or non-APFS.
+        var cloned = false
+        var cloneErrno: Int32 = 0
+        src.withUnsafeFileSystemRepresentation { srcPtr in
+            guard let srcPtr else { return }
+            dst.withUnsafeFileSystemRepresentation { dstPtr in
+                guard let dstPtr else { return }
+                if Darwin.clonefile(srcPtr, dstPtr, 0) == 0 {
+                    cloned = true
+                } else {
+                    cloneErrno = errno
+                }
             }
-            throw error
+        }
+
+        if cloneErrno == EEXIST {
+            return TransferJobResult(filename: job.file.filename, copiedRawCount: 0, copiedJPEGCount: 0, skippedCount: 1)
+        }
+
+        if !cloned {
+            // clonefile can leave a partial file on failure — clean up before falling back
+            if fileManager.fileExists(atPath: dst.path) {
+                try? fileManager.removeItem(at: dst)
+            }
+            do {
+                try fileManager.copyItem(at: src, to: dst)
+            } catch let error as NSError {
+                if error.domain == NSCocoaErrorDomain && error.code == NSFileWriteFileExistsError {
+                    return TransferJobResult(filename: job.file.filename, copiedRawCount: 0, copiedJPEGCount: 0, skippedCount: 1)
+                }
+                throw error
+            }
         }
 
         return TransferJobResult(
@@ -537,6 +629,12 @@ struct TransferService {
             copiedJPEGCount: job.file.isRaw ? 0 : 1,
             skippedCount: 0
         )
+    }
+
+    private func onSameVolume(_ path1: String, _ path2: String) -> Bool {
+        var fs1 = statfs(), fs2 = statfs()
+        guard statfs(path1, &fs1) == 0, statfs(path2, &fs2) == 0 else { return false }
+        return fs1.f_fsid.val.0 == fs2.f_fsid.val.0 && fs1.f_fsid.val.1 == fs2.f_fsid.val.1
     }
 
     private func destinationFolder(root: String, folderName: String, photoDate: Date) -> URL {
@@ -559,12 +657,10 @@ struct TransferService {
 
     private func sanitizeFolderName(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return "Unlabeled"
-        }
+        if trimmed.isEmpty { return "Unlabeled" }
         return trimmed
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: "\\", with: "-")
+            .replacingOccurrences(of: ">", with: "/")
+            .replacingOccurrences(of: "\\", with: "/")
             .replacingOccurrences(of: ":", with: "-")
     }
 }

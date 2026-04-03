@@ -117,7 +117,7 @@ final class AppViewModel: ObservableObject {
         scanDetailText = ""
         scanTask = Task.detached(priority: .userInitiated) { [config] in
             do {
-                let result = try PhotoScanner(config: config).scan(
+                let result = try await PhotoScanner(config: config).scan(
                     sourcePath: sourcePath,
                     onProgress: { progress in
                         Task { @MainActor in
@@ -294,6 +294,48 @@ final class AppViewModel: ObservableObject {
         dateGroups[index].isSelected.toggle()
     }
 
+    // Toggle a single JPEG preview's inclusion. If it has a paired RAW, the RAW is toggled too.
+    func togglePhotoIncluded(dateGroupID: DateGroup.ID, photoID: PhotoPreview.ID) {
+        guard let groupIndex = dateGroups.firstIndex(where: { $0.id == dateGroupID }),
+              let previewIndex = dateGroups[groupIndex].previews.firstIndex(where: { $0.id == photoID }) else { return }
+
+        let newValue = !dateGroups[groupIndex].previews[previewIndex].isIncluded
+        dateGroups[groupIndex].previews[previewIndex].isIncluded = newValue
+
+        let dateKey = dateGroups[groupIndex].dateKey
+        let preview = dateGroups[groupIndex].previews[previewIndex]
+
+        // sync into filesByDate so TransferService sees the change
+        if var files = filesByDate[dateKey] {
+            for i in files.indices {
+                // match the JPEG itself
+                if files[i].sourcePath == preview.path {
+                    files[i].isIncluded = newValue
+                }
+                // match its paired RAW (same base name, isRaw == true)
+                if let pairedKey = preview.pairedKey,
+                   files[i].isRaw,
+                   baseName(of: files[i].filename) == pairedKey {
+                    files[i].isIncluded = newValue
+                }
+            }
+            filesByDate[dateKey] = files
+        }
+    }
+
+    private func baseName(of filename: String) -> String {
+        URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
+    }
+
+    private func sendNotification(title: String, body: String) {
+        let safe = { (s: String) in s.replacingOccurrences(of: "\"", with: "'") }
+        let script = "display notification \"\(safe(body))\" with title \"\(safe(title))\" sound name \"default\""
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", script]
+        try? task.run()
+    }
+
     func revealInFinder(for dateKey: String) {
         guard let files = filesByDate[dateKey], let firstFile = files.first else {
             statusText = "No files found for that shoot date."
@@ -428,7 +470,9 @@ final class AppViewModel: ObservableObject {
                 }
                 await MainActor.run {
                     self.refreshFolderOptions()
-                    self.statusText = "Transfer complete: \(summary.copiedRawCount) RAW, \(summary.copiedJPEGCount) JPEG, \(summary.skippedCount) skipped."
+                    let summaryText = "Transfer complete: \(summary.copiedRawCount) RAW, \(summary.copiedJPEGCount) JPEG, \(summary.skippedCount) skipped."
+                    self.statusText = summaryText
+                    self.sendNotification(title: "Transfer Complete", body: "\(currentGroups.count) day(s) transferred. \(summary.copiedRawCount) RAW, \(summary.copiedJPEGCount) JPEG.")
                     self.transferDetailText = "Done."
                     self.transferProgressFraction = 1
                     self.lastTransferSummaryText = "\(currentGroups.count) day(s) transferred to \(destinationRoot)"
@@ -461,14 +505,16 @@ final class AppViewModel: ObservableObject {
     }
 
     func resolvedFolderName(for group: DateGroup) -> String {
-        let trimmed = group.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return "Unlabeled"
-        }
+        sanitizeFolderInput(group.folderName)
+    }
+
+    private func sanitizeFolderInput(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Unlabeled" }
         return trimmed
-            .replacingOccurrences(of: "/", with: "-")
-            .replacingOccurrences(of: "\\", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: ">", with: "/")  // allow > as subfolder separator
+            .replacingOccurrences(of: "\\", with: "/") // normalize backslash
+            .replacingOccurrences(of: ":", with: "-")  // colons are invalid on macOS
     }
 
     func destinationPreviewPath(for group: DateGroup) -> String {
