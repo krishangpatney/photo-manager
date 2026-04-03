@@ -1,4 +1,5 @@
 import AppKit
+import MapKit
 import SwiftUI
 
 struct ContentView: View {
@@ -176,6 +177,19 @@ struct ContentView: View {
                 Button("Choose Folder") { viewModel.chooseDestinationFolder() }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+            }
+
+            HStack(spacing: 6) {
+                Text("Folder structure:")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Picker("", selection: $viewModel.folderStructure) {
+                    ForEach(FolderStructure.allCases) { structure in
+                        Text(structure.title).tag(structure)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 175)
             }
 
             ScrollView {
@@ -448,6 +462,24 @@ private struct DateGroupCard: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color(nsColor: .controlBackgroundColor))
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+
+                    if let coord = group.representativeCoordinate {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Shoot location")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                            Map(position: .constant(.region(MKCoordinateRegion(
+                                center: CLLocationCoordinate2D(latitude: coord.latitude, longitude: coord.longitude),
+                                span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
+                            )))) {
+                                Marker("", coordinate: CLLocationCoordinate2D(latitude: coord.latitude, longitude: coord.longitude))
+                            }
+                            .mapStyle(.standard)
+                            .frame(height: 140)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .allowsHitTesting(false)
+                        }
                     }
                 }
                 .padding(16)

@@ -242,13 +242,14 @@ struct PhotoScanner {
                 let c = candidates[i]
                 nextIndex += 1
                 group.addTask {
-                    let photoDate = Self.readPhotoDateStatic(from: c.url) ?? c.modDate ?? Date()
+                    let (photoDate, coordinate) = Self.readExifDataStatic(from: c.url)
                     let file = PhotoFile(
                         sourcePath: c.url.path,
                         filename: c.url.lastPathComponent,
-                        photoDate: photoDate,
+                        photoDate: photoDate ?? c.modDate ?? Date(),
                         fileSize: c.fileSize,
-                        isRaw: c.isRaw
+                        isRaw: c.isRaw,
+                        coordinate: coordinate
                     )
                     return (i, file)
                 }
@@ -307,6 +308,8 @@ struct PhotoScanner {
                     )
                 }
 
+            let representativeCoordinate = files.first(where: { $0.coordinate != nil })?.coordinate
+
             return DateGroup(
                 dateKey: key,
                 displayDate: displayDate(for: files.first?.photoDate ?? Date()),
@@ -317,6 +320,7 @@ struct PhotoScanner {
                 folderName: "",
                 previews: allPreviews,
                 rawOnlyCount: rawOnlyCount,
+                representativeCoordinate: representativeCoordinate,
                 isExpanded: false,
                 isSelected: false
             )
@@ -329,8 +333,9 @@ struct PhotoScanner {
         )
     }
 
-    // Static + creates its own formatter so it's safe to call from concurrent tasks
-    private static func readPhotoDateStatic(from url: URL) -> Date? {
+    // Static + creates its own formatter so it's safe to call from concurrent tasks.
+    // Returns the EXIF date (if present) and GPS coordinate (if present).
+    private static func readExifDataStatic(from url: URL) -> (date: Date?, coordinate: Coordinate?) {
         let options: CFDictionary = [
             kCGImageSourceShouldCache: false,
             kCGImageSourceShouldCacheImmediately: false,
@@ -338,24 +343,38 @@ struct PhotoScanner {
 
         guard let source = CGImageSourceCreateWithURL(url as CFURL, options),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
-            return nil
+            return (nil, nil)
         }
 
         let formatter = makeDateFormatter()
+        var date: Date? = nil
 
         if let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any],
            let value = exif[kCGImagePropertyExifDateTimeOriginal] as? String,
            let parsed = formatter.date(from: value) {
-            return parsed
+            date = parsed
         }
 
-        if let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any],
+        if date == nil,
+           let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any],
            let value = tiff[kCGImagePropertyTIFFDateTime] as? String,
            let parsed = formatter.date(from: value) {
-            return parsed
+            date = parsed
         }
 
-        return nil
+        var coordinate: Coordinate? = nil
+        if let gps = properties[kCGImagePropertyGPSDictionary] as? [CFString: Any],
+           let lat = gps[kCGImagePropertyGPSLatitude] as? Double,
+           let lon = gps[kCGImagePropertyGPSLongitude] as? Double {
+            let latRef = gps[kCGImagePropertyGPSLatitudeRef] as? String ?? "N"
+            let lonRef = gps[kCGImagePropertyGPSLongitudeRef] as? String ?? "E"
+            coordinate = Coordinate(
+                latitude: latRef == "S" ? -lat : lat,
+                longitude: lonRef == "W" ? -lon : lon
+            )
+        }
+
+        return (date, coordinate)
     }
 
     private static func makeDateFormatter() -> DateFormatter {
@@ -493,12 +512,13 @@ struct TransferService {
         filesByDate: [String: [PhotoFile]],
         dateGroups: [DateGroup],
         destinationRoot: String,
+        folderStructure: FolderStructure = .yearMonthDay,
         onProgress: ((TransferProgress) -> Void)? = nil
     ) async throws -> TransferSummary {
         var copiedRaw = 0
         var copiedJPEG = 0
         var skipped = 0
-        let jobs = buildJobs(filesByDate: filesByDate, dateGroups: dateGroups, destinationRoot: destinationRoot)
+        let jobs = buildJobs(filesByDate: filesByDate, dateGroups: dateGroups, destinationRoot: destinationRoot, folderStructure: folderStructure)
         let totalFiles = jobs.count
         var completed = 0
 
@@ -554,14 +574,14 @@ struct TransferService {
         return TransferSummary(copiedRawCount: copiedRaw, copiedJPEGCount: copiedJPEG, skippedCount: skipped)
     }
 
-    private func buildJobs(filesByDate: [String: [PhotoFile]], dateGroups: [DateGroup], destinationRoot: String) -> [TransferJob] {
+    private func buildJobs(filesByDate: [String: [PhotoFile]], dateGroups: [DateGroup], destinationRoot: String, folderStructure: FolderStructure) -> [TransferJob] {
         let folders = Dictionary(uniqueKeysWithValues: dateGroups.map { ($0.dateKey, sanitizeFolderName($0.folderName)) })
         var jobs: [TransferJob] = []
 
         for (dateKey, files) in filesByDate {
             let folderName = folders[dateKey] ?? "Unlabeled"
             for file in files where file.isIncluded {
-                let baseFolder = destinationFolder(root: destinationRoot, folderName: folderName, photoDate: file.photoDate)
+                let baseFolder = destinationFolder(root: destinationRoot, folderName: folderName, photoDate: file.photoDate, structure: folderStructure)
                 let leaf = baseFolder.appendingPathComponent(file.isRaw ? "raw" : "jpeg", isDirectory: true)
                 let destination = leaf.appendingPathComponent(file.filename)
                 jobs.append(TransferJob(file: file, destinationDirectory: leaf, destinationFile: destination))
@@ -637,22 +657,37 @@ struct TransferService {
         return fs1.f_fsid.val.0 == fs2.f_fsid.val.0 && fs1.f_fsid.val.1 == fs2.f_fsid.val.1
     }
 
-    private func destinationFolder(root: String, folderName: String, photoDate: Date) -> URL {
+    private func destinationFolder(root: String, folderName: String, photoDate: Date, structure: FolderStructure) -> URL {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
 
-        formatter.dateFormat = "yyyy"
-        let year = formatter.string(from: photoDate)
-        formatter.dateFormat = "MMMM"
-        let month = formatter.string(from: photoDate)
-        formatter.dateFormat = "dd"
-        let day = formatter.string(from: photoDate)
-
-        return URL(fileURLWithPath: root, isDirectory: true)
+        var base = URL(fileURLWithPath: root, isDirectory: true)
             .appendingPathComponent(folderName, isDirectory: true)
-            .appendingPathComponent(year, isDirectory: true)
-            .appendingPathComponent(month, isDirectory: true)
-            .appendingPathComponent(day, isDirectory: true)
+
+        switch structure {
+        case .yearMonthDay:
+            formatter.dateFormat = "yyyy"
+            let year = formatter.string(from: photoDate)
+            formatter.dateFormat = "MMMM"
+            let month = formatter.string(from: photoDate)
+            formatter.dateFormat = "dd"
+            let day = formatter.string(from: photoDate)
+            base = base.appendingPathComponent(year).appendingPathComponent(month).appendingPathComponent(day)
+        case .yearMonth:
+            formatter.dateFormat = "yyyy"
+            let year = formatter.string(from: photoDate)
+            formatter.dateFormat = "MMMM"
+            let month = formatter.string(from: photoDate)
+            base = base.appendingPathComponent(year).appendingPathComponent(month)
+        case .year:
+            formatter.dateFormat = "yyyy"
+            let year = formatter.string(from: photoDate)
+            base = base.appendingPathComponent(year)
+        case .flat:
+            break
+        }
+
+        return base
     }
 
     private func sanitizeFolderName(_ value: String) -> String {

@@ -20,6 +20,7 @@ final class AppViewModel: ObservableObject {
     @Published var transferProgressFraction: Double = 0
     @Published var lastTransferSummaryText: String = ""
     @Published var ignoredScanFileCount = 0
+    @Published var folderStructure: FolderStructure = .yearMonthDay
 
     private let config: AppConfig
     private var filesByDate: [String: [PhotoFile]] = [:]
@@ -323,6 +324,14 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    private func availableFreeBytes(at path: String) -> Int64? {
+        guard !path.isEmpty else { return nil }
+        let url = URL(fileURLWithPath: path)
+        guard let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+              let available = values.volumeAvailableCapacityForImportantUsage else { return nil }
+        return Int64(available)
+    }
+
     private func baseName(of filename: String) -> String {
         URL(fileURLWithPath: filename).deletingPathExtension().lastPathComponent
     }
@@ -442,6 +451,13 @@ final class AppViewModel: ObservableObject {
     }
 
     private func runTransfer(filesByDate: [String: [PhotoFile]], groups: [DateGroup], statusPrefix: String) {
+        // Free space check
+        let totalBytes = filesByDate.values.flatMap { $0 }.filter(\.isIncluded).reduce(0) { $0 + $1.fileSize }
+        if let available = availableFreeBytes(at: selectedDestination), totalBytes > 0, available < totalBytes {
+            statusText = "Not enough space on destination. Need \(ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)), only \(ByteCountFormatter.string(fromByteCount: available, countStyle: .file)) available."
+            return
+        }
+
         transferTask?.cancel()
         isWorking = true
         statusText = statusPrefix
@@ -452,12 +468,14 @@ final class AppViewModel: ObservableObject {
         let currentFilesByDate = filesByDate
         let currentGroups = groups
         let destinationRoot = selectedDestination
+        let currentFolderStructure = folderStructure
         transferTask = Task.detached(priority: .userInitiated) {
             do {
                 let summary = try await TransferService().transfer(
                     filesByDate: currentFilesByDate,
                     dateGroups: currentGroups,
                     destinationRoot: destinationRoot,
+                    folderStructure: currentFolderStructure,
                     onProgress: { progress in
                         Task { @MainActor in
                             self.transferProgressFraction = progress.fractionComplete
@@ -526,19 +544,33 @@ final class AppViewModel: ObservableObject {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
 
-        formatter.dateFormat = "yyyy"
-        let year = formatter.string(from: file.photoDate)
-        formatter.dateFormat = "MMMM"
-        let month = formatter.string(from: file.photoDate)
-        formatter.dateFormat = "dd"
-        let day = formatter.string(from: file.photoDate)
-
-        return URL(fileURLWithPath: selectedDestination, isDirectory: true)
+        var path = URL(fileURLWithPath: selectedDestination, isDirectory: true)
             .appendingPathComponent(resolvedFolderName(for: group), isDirectory: true)
-            .appendingPathComponent(year, isDirectory: true)
-            .appendingPathComponent(month, isDirectory: true)
-            .appendingPathComponent(day, isDirectory: true)
-            .path
+
+        switch folderStructure {
+        case .yearMonthDay:
+            formatter.dateFormat = "yyyy"
+            let year = formatter.string(from: file.photoDate)
+            formatter.dateFormat = "MMMM"
+            let month = formatter.string(from: file.photoDate)
+            formatter.dateFormat = "dd"
+            let day = formatter.string(from: file.photoDate)
+            path = path.appendingPathComponent(year).appendingPathComponent(month).appendingPathComponent(day)
+        case .yearMonth:
+            formatter.dateFormat = "yyyy"
+            let year = formatter.string(from: file.photoDate)
+            formatter.dateFormat = "MMMM"
+            let month = formatter.string(from: file.photoDate)
+            path = path.appendingPathComponent(year).appendingPathComponent(month)
+        case .year:
+            formatter.dateFormat = "yyyy"
+            let year = formatter.string(from: file.photoDate)
+            path = path.appendingPathComponent(year)
+        case .flat:
+            break
+        }
+
+        return path.path
     }
 
     var selectedDateCount: Int {
