@@ -1,139 +1,104 @@
 # Photo Transfer Manager
 
-Native macOS photo import app built with SwiftUI.
+A native macOS app for importing and organizing photos from SD cards — built with SwiftUI.
 
-## What is here
+---
 
-- `macos-app/` - the active macOS app
-- `config.json` - shared scan/import configuration
-- `LICENSE` - non-commercial source-available license for this project
+## What it does
 
-## Run the app
+- Detects SD cards and mounted drives automatically
+- Scans and groups photos by shoot date
+- Lets you name each shoot and preview photos before transferring
+- Copies files into an organized folder structure: `Shoot Name / Year / Month / Day / raw` or `jpeg`
+- Supports reorganizing an existing folder of photos into the same structure
+- Eject your SD card directly from the app when done
 
-```bash
-cd macos-app
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer CLANG_MODULE_CACHE_PATH=.build/clang-module-cache swift build --scratch-path .build/swiftpm-cache
-open ./.build/swiftpm-cache/arm64-apple-macosx/debug/PhotoTransferMac
-```
+---
 
-## Build a shareable app
+## Download
 
-To make an unsigned `.app` bundle for friends:
+Grab the latest release from the [Releases page](../../releases). Unzip and move the app to your Applications folder.
 
-```bash
-cd macos-app
-./scripts/build-app.sh
-```
+> Because the app is unsigned, macOS may warn you on first launch. Right-click the app and choose **Open** to proceed. If macOS says it's damaged, run:
+> ```bash
+> xattr -dr com.apple.quarantine "/Applications/Photo Transfer Manager.app"
+> ```
 
-That creates:
+---
 
-```bash
-macos-app/.build/share/Photo Transfer Manager.app
-```
+## Contributing
 
-To package it as a shareable zip:
+Contributions are welcome! Here's how to get involved:
 
-```bash
-cd macos-app
-./scripts/package-share.sh
-```
+### Reporting bugs or requesting features
 
-That creates:
+Open an issue on the [Issues page](../../issues). Please include:
+- What you were trying to do
+- What happened instead
+- Your macOS version
 
-```bash
-macos-app/dist/photo-transfer-manager-0.1.0-macos.zip
-```
+### Submitting a pull request
 
-You can also override the version:
+1. Fork the repo and create a branch from `main`
+2. Make your changes
+3. Open a pull request with a clear description of what you changed and why
 
-```bash
-cd macos-app
-VERSION=0.2.0 BUILD_NUMBER=12 ./scripts/package-share.sh
-```
+---
 
-## Sharing with friends
+## Development
 
-Because this build is unsigned, macOS may warn when your friends open it. They can still launch it by:
+### Requirements
 
-1. moving the app to `Applications`
-2. right-clicking the app
-3. choosing `Open`
-4. confirming the prompt
+- macOS 13 or later
+- Xcode 15 or later (for the Swift toolchain)
 
-If macOS says the app is damaged, remove the quarantine flag once:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/Photo Transfer Manager.app"
-```
-
-## GitHub Releases
-
-This repo can publish the shareable zip to GitHub Releases automatically.
-
-Push a version tag like this:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-That triggers the GitHub Actions workflow in `.github/workflows/release.yml`, which:
-
-- builds the macOS app
-- packages the unsigned zip
-- uploads it to GitHub Releases
-
-## Add a custom app icon
-
-If you want the app to have a proper macOS icon in Finder and Launchpad:
-
-1. Create a square source image, ideally at least `1024x1024`
-2. Convert it into a macOS `.icns` file named:
-
-```bash
-macos-app/Resources/AppIcon.icns
-```
-
-3. Rebuild the shareable package:
+### Run locally
 
 ```bash
 cd macos-app
-./scripts/package-share.sh
+swift build
+.build/debug/PhotoTransferMac
 ```
 
-The packaging script already checks for `macos-app/Resources/AppIcon.icns` and automatically bundles it into the app.
-
-If you start from a PNG, one common macOS flow is:
+### Run tests
 
 ```bash
-mkdir AppIcon.iconset
-sips -z 16 16 icon.png --out AppIcon.iconset/icon_16x16.png
-sips -z 32 32 icon.png --out AppIcon.iconset/icon_16x16@2x.png
-sips -z 32 32 icon.png --out AppIcon.iconset/icon_32x32.png
-sips -z 64 64 icon.png --out AppIcon.iconset/icon_32x32@2x.png
-sips -z 128 128 icon.png --out AppIcon.iconset/icon_128x128.png
-sips -z 256 256 icon.png --out AppIcon.iconset/icon_128x128@2x.png
-sips -z 256 256 icon.png --out AppIcon.iconset/icon_256x256.png
-sips -z 512 512 icon.png --out AppIcon.iconset/icon_256x256@2x.png
-sips -z 512 512 icon.png --out AppIcon.iconset/icon_512x512.png
-cp icon.png AppIcon.iconset/icon_512x512@2x.png
-iconutil -c icns AppIcon.iconset -o macos-app/Resources/AppIcon.icns
+cd macos-app
+swift test
 ```
 
-After that, tag a new release and GitHub will publish the app with the new icon.
+### Project structure
 
-## Current workflow
+```
+macos-app/
+  Sources/PhotoTransferMac/
+    PhotoTransferApp.swift   # App entry point
+    ContentView.swift        # Main UI
+    AppViewModel.swift       # State and business logic
+    Services.swift           # Scanning, transfer, volume detection
+    Models.swift             # Data types
+    PhotoReviewSheet.swift   # Per-photo review UI
+  Tests/
+config.json                  # Optional: override scan settings
+```
 
-- detect SD card
-- scan on demand
-- map each shoot date to a folder
-- transfer one day or selected days
-- eject the SD card from the app when done
+### Configuration
+
+A `config.json` file in the project root lets you override defaults like the supported RAW extensions or SD card names. If absent, the app uses sensible defaults.
+
+### Releasing
+
+Tag a version to trigger a GitHub Actions build and release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+This builds an unsigned `.app` bundle, zips it, and publishes it to GitHub Releases automatically.
+
+---
 
 ## License
 
-This project is source-available for personal, educational, and other
-non-commercial use only.
-
-You may copy and modify it, but you may not sell it or use it commercially
-without prior written permission.
+Source-available for personal and educational use. You may copy and modify the code, but you may not sell it or use it commercially without prior written permission.
