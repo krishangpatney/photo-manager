@@ -243,13 +243,15 @@ struct PhotoScanner {
                 nextIndex += 1
                 group.addTask {
                     let (photoDate, coordinate) = Self.readExifDataStatic(from: c.url)
+                    let blurScore = c.isRaw ? nil : Self.computeBlurScoreStatic(from: c.url)
                     let file = PhotoFile(
                         sourcePath: c.url.path,
                         filename: c.url.lastPathComponent,
                         photoDate: photoDate ?? c.modDate ?? Date(),
                         fileSize: c.fileSize,
                         isRaw: c.isRaw,
-                        coordinate: coordinate
+                        coordinate: coordinate,
+                        blurScore: blurScore
                     )
                     return (i, file)
                 }
@@ -304,7 +306,8 @@ struct PhotoScanner {
                         path: jpeg.sourcePath,
                         filename: jpeg.filename,
                         bytes: jpeg.fileSize,
-                        pairedKey: rawBaseNames.contains(base) ? base : nil
+                        pairedKey: rawBaseNames.contains(base) ? base : nil,
+                        blurScore: jpeg.blurScore
                     )
                 }
 
@@ -375,6 +378,78 @@ struct PhotoScanner {
         }
 
         return (date, coordinate)
+    }
+
+    // Tenengrad blur score for a JPEG. Higher = sharper. Returns nil if the image can't be read.
+    // Only call for non-RAW files — RAW requires demosaicing before analysis.
+    //
+    // Method: render a 512px thumbnail to an 8-bit grayscale bitmap, compute Sobel gradients
+    // over the central 60% of the image (ignores intentional background bokeh at the edges),
+    // and return the mean squared gradient normalised to 0–1.
+    private static func computeBlurScoreStatic(from url: URL) -> Double? {
+        let thumbOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 512,
+            kCGImageSourceShouldCache: false,
+        ]
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let cgThumb = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary) else {
+            return nil
+        }
+
+        let w = cgThumb.width
+        let h = cgThumb.height
+        guard w > 4, h > 4 else { return nil }
+
+        // Render to 8-bit grayscale bitmap
+        var pixels = [UInt8](repeating: 0, count: w * h)
+        guard let ctx = CGContext(
+            data: &pixels,
+            width: w,
+            height: h,
+            bitsPerComponent: 8,
+            bytesPerRow: w,
+            space: CGColorSpaceCreateDeviceGray(),
+            bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else { return nil }
+        ctx.draw(cgThumb, in: CGRect(x: 0, y: 0, width: w, height: h))
+
+        // Analyse only the central 60% — excludes intentional background blur at the edges
+        let xStart = w / 5
+        let xEnd   = w - w / 5
+        let yStart = h / 5
+        let yEnd   = h - h / 5
+        guard xEnd - xStart > 1, yEnd - yStart > 1 else { return nil }
+
+        // Sobel Tenengrad: T(x,y) = Gx² + Gy²
+        // Gx kernel: [-1,0,1 / -2,0,2 / -1,0,1]
+        // Gy kernel: [-1,-2,-1 / 0,0,0 / 1,2,1]
+        var sumT = 0.0
+        var n = 0
+
+        for y in max(1, yStart)..<min(h - 1, yEnd) {
+            for x in max(1, xStart)..<min(w - 1, xEnd) {
+                let tl = Int(pixels[(y - 1) * w + (x - 1)])
+                let tc = Int(pixels[(y - 1) * w +  x     ])
+                let tr = Int(pixels[(y - 1) * w + (x + 1)])
+                let ml = Int(pixels[ y      * w + (x - 1)])
+                let mr = Int(pixels[ y      * w + (x + 1)])
+                let bl = Int(pixels[(y + 1) * w + (x - 1)])
+                let bc = Int(pixels[(y + 1) * w +  x     ])
+                let br = Int(pixels[(y + 1) * w + (x + 1)])
+
+                let gx = Double(-tl + tr - 2 * ml + 2 * mr - bl + br)
+                let gy = Double(-tl - 2 * tc - tr + bl + 2 * bc + br)
+                sumT += gx * gx + gy * gy
+                n += 1
+            }
+        }
+
+        guard n > 0 else { return nil }
+        let meanT = sumT / Double(n)
+        // Normalise: max Gx or Gy for 8-bit = 4*255 = 1020, so max Gx²+Gy² = 2*1020² ≈ 2_080_800
+        return min(1, meanT / 2_080_800)
     }
 
     private static func makeDateFormatter() -> DateFormatter {
