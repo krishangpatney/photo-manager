@@ -21,6 +21,9 @@ final class AppViewModel: ObservableObject {
     @Published var lastTransferSummaryText: String = ""
     @Published var ignoredScanFileCount = 0
     @Published var folderStructure: FolderStructure = .yearMonthDay
+    @Published var blurThreshold: Double = BlurDetection.threshold {
+        didSet { BlurDetection.threshold = blurThreshold }
+    }
 
     private let config: AppConfig
     private var filesByDate: [String: [PhotoFile]] = [:]

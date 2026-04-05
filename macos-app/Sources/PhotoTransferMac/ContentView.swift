@@ -11,6 +11,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     storageSection
+                    optionsBar
                     if !viewModel.dateGroups.isEmpty || viewModel.isScanning {
                         groupsSection
                     }
@@ -179,19 +180,6 @@ struct ContentView: View {
                     .controlSize(.small)
             }
 
-            HStack(spacing: 6) {
-                Text("Folder structure:")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Picker("", selection: $viewModel.folderStructure) {
-                    ForEach(FolderStructure.allCases) { structure in
-                        Text(structure.title).tag(structure)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 175)
-            }
-
             ScrollView {
                 VStack(spacing: 8) {
                     ForEach(viewModel.destinationVolumes) { volume in
@@ -205,6 +193,51 @@ struct ContentView: View {
             .frame(maxHeight: 220)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    // MARK: Options bar
+
+    private var optionsBar: some View {
+        HStack(spacing: 0) {
+            // Folder structure
+            HStack(spacing: 8) {
+                Label("Folder structure", systemImage: "folder.badge.gearshape")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Picker("", selection: $viewModel.folderStructure) {
+                    ForEach(FolderStructure.allCases) { structure in
+                        Text(structure.title).tag(structure)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 180)
+            }
+
+            Divider()
+                .frame(height: 20)
+                .padding(.horizontal, 16)
+
+            // Blur detection sensitivity
+            HStack(spacing: 8) {
+                Label("Blur sensitivity", systemImage: "eye.trianglebadge.exclamationmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text("Low")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                Slider(value: $viewModel.blurThreshold, in: 0.0005...0.008)
+                    .frame(width: 110)
+                Text("High")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     @ViewBuilder
@@ -388,6 +421,15 @@ private struct DateGroupCard: View {
                             Text("\(group.excludedCount) excluded")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(.orange)
+                        }
+                        if group.blurryCount > 0 {
+                            Label("\(group.blurryCount) blurry", systemImage: "eye.trianglebadge.exclamationmark")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.yellow)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(Color.yellow.opacity(0.12))
+                                .clipShape(Capsule())
                         }
                     }
                 }

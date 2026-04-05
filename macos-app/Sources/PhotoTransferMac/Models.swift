@@ -117,6 +117,13 @@ struct VolumeOption: Identifiable, Hashable, Sendable {
     }
 }
 
+enum BlurDetection {
+    /// Normalised Tenengrad (Sobel mean squared gradient) below this is flagged as likely blurry.
+    /// Scale: 0–1, where 1 is the theoretical maximum for an 8-bit image.
+    /// Typical sharp photo ≈ 0.005–0.05; typical blurry/soft photo ≈ 0.0001–0.002.
+    static var threshold: Double = 0.002
+}
+
 struct PhotoFile: Hashable, Sendable {
     let sourcePath: String
     let filename: String
@@ -125,6 +132,7 @@ struct PhotoFile: Hashable, Sendable {
     let isRaw: Bool
     var isIncluded: Bool = true
     var coordinate: Coordinate? = nil
+    var blurScore: Double? = nil
 }
 
 struct PhotoPreview: Identifiable, Hashable, Sendable {
@@ -135,13 +143,20 @@ struct PhotoPreview: Identifiable, Hashable, Sendable {
     // base filename without extension — used to link a JPEG preview to its RAW pair
     let pairedKey: String?
     var isIncluded: Bool = true
+    let blurScore: Double?
 
-    init(path: String?, filename: String, bytes: Int64, pairedKey: String? = nil) {
+    init(path: String?, filename: String, bytes: Int64, pairedKey: String? = nil, blurScore: Double? = nil) {
         self.id = path ?? filename
         self.path = path
         self.filename = filename
         self.bytes = bytes
         self.pairedKey = pairedKey
+        self.blurScore = blurScore
+    }
+
+    var isLikelyBlurry: Bool {
+        guard let score = blurScore else { return false }
+        return score < BlurDetection.threshold
     }
 }
 
@@ -185,6 +200,10 @@ struct DateGroup: Identifiable, Hashable, Sendable {
 
     var excludedCount: Int {
         previews.filter { !$0.isIncluded }.count
+    }
+
+    var blurryCount: Int {
+        previews.filter(\.isLikelyBlurry).count
     }
 }
 

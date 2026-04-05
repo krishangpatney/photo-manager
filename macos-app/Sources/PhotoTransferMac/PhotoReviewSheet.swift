@@ -61,6 +61,7 @@ struct PhotoReviewSheet: View {
     @State private var fullResImages: [String: CGImage] = [:]
     // rotation per photo path, in 90° steps
     @State private var rotations: [String: Int] = [:]
+    @State private var showSharpnessPopover = false
 
     private let stripCache = ImageCache()
     private let fullResCache = ImageCache()
@@ -98,6 +99,7 @@ struct PhotoReviewSheet: View {
         .frame(minWidth: 900, minHeight: 620)
         .task { await prefetchStrip() }
         .onChange(of: currentIndex) { _, _ in
+            showSharpnessPopover = false
             Task { await loadFullRes(around: currentIndex) }
         }
         .task { await loadFullRes(around: 0) }
@@ -116,6 +118,16 @@ struct PhotoReviewSheet: View {
             Text("\(includedCount) of \(previews.count) JPEG(s) selected for transfer")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
+
+            if group.blurryCount > 0 {
+                Label("\(group.blurryCount) possibly blurry", systemImage: "eye.trianglebadge.exclamationmark")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.yellow)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.yellow.opacity(0.12))
+                    .clipShape(Capsule())
+            }
 
             if group.rawOnlyCount > 0 {
                 Text("\(group.rawOnlyCount) RAW-only (always included)")
@@ -239,6 +251,31 @@ struct PhotoReviewSheet: View {
                                     .background(Color.blue.opacity(0.1))
                                     .clipShape(Capsule())
                             }
+                            if preview.blurScore != nil {
+                                Button(action: { showSharpnessPopover.toggle() }) {
+                                    if preview.isLikelyBlurry {
+                                        Label("Possibly blurry", systemImage: "eye.trianglebadge.exclamationmark")
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundStyle(.yellow)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(Color.yellow.opacity(0.12))
+                                            .clipShape(Capsule())
+                                    } else {
+                                        Label("Sharpness", systemImage: "info.circle")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(Color(nsColor: .controlBackgroundColor))
+                                            .clipShape(Capsule())
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .popover(isPresented: $showSharpnessPopover, arrowEdge: .top) {
+                                    SharpnessPopover(preview: preview)
+                                }
+                            }
                             Text("\(currentIndex + 1) / \(previews.count)")
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
@@ -354,6 +391,65 @@ struct PhotoReviewSheet: View {
     }
 }
 
+// MARK: - Sharpness popover
+
+private struct SharpnessPopover: View {
+    let preview: PhotoPreview
+
+    private var score: Double { preview.blurScore ?? 0 }
+
+    // Normalise for display: map 0...0.01 → 0...1
+    private var displayFraction: Double { min(score / 0.01, 1.0) }
+
+    private var label: String {
+        switch score {
+        case ..<BlurDetection.threshold:      return "Likely blurry"
+        case ..<0.005:                        return "Slightly soft"
+        case ..<0.015:                        return "Sharp"
+        default:                              return "Very sharp"
+        }
+    }
+
+    private var barColor: Color {
+        switch score {
+        case ..<BlurDetection.threshold: return .red
+        case ..<0.005:                   return .orange
+        case ..<0.015:                   return .green
+        default:                         return .mint
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Sharpness")
+                .font(.system(size: 13, weight: .semibold))
+
+            VStack(alignment: .leading, spacing: 4) {
+                ProgressView(value: displayFraction)
+                    .tint(barColor)
+                    .frame(width: 200)
+
+                HStack {
+                    Text(label)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(barColor)
+                    Spacer()
+                    Text(String(format: "%.5f", score))
+                        .font(.system(size: 11).monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Text("Photos below \(String(format: "%.4f", BlurDetection.threshold)) are flagged as blurry. Adjust sensitivity in the options bar.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(width: 240)
+    }
+}
+
 // MARK: - Film strip cell
 
 private struct FilmStripCell: View {
@@ -378,6 +474,20 @@ private struct FilmStripCell: View {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 20))
                     .foregroundStyle(.red.opacity(0.9))
+            }
+
+            if preview.isLikelyBlurry {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Image(systemName: "eye.trianglebadge.exclamationmark")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.yellow)
+                            .shadow(color: .black.opacity(0.6), radius: 2)
+                            .padding(5)
+                        Spacer()
+                    }
+                }
             }
         }
         .frame(width: 110, height: 80)
